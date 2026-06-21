@@ -1,0 +1,22 @@
+# Credenciais e segredos — NUNCA versionar
+.env
+.env.*
+!.env.example
+
+# Bases de dados / planilhas com dados da empresa
+*.xlsx
+*.xls
+*.csv
+Base_*
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Sistema
+.DS_Store
+Thumbs.db
