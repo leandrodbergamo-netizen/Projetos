@@ -92,14 +92,18 @@ def materia_prima_de(desc_material):
 # "mock"  -> dados de exemplo gerados em memória (roda sem nenhuma base).
 FONTE_DADOS = os.getenv("FONTE_DADOS", "excel")
 
-# Arquivos das bases reais (na raiz do projeto).
-ARQ_ESTOQUE = RAIZ / "Base_Estoque.xlsx"
-ARQ_LOJAS = RAIZ / "Base_Lojas.xlsx"
-ARQ_PRODUTOS = RAIZ / "Base_Produtos.xlsx"
+# Pasta com as bases reais (.xlsx). Padrão: Projetos\dados (um nível acima do
+# projeto). Sobreponível via variável de ambiente PASTA_BASES.
+PASTA_BASES = Path(os.getenv("PASTA_BASES", str(RAIZ.parent / "dados")))
+
+ARQ_ESTOQUE = PASTA_BASES / "Base_Estoque.xlsx"
+ARQ_LOJAS = PASTA_BASES / "Base_Lojas.xlsx"
+ARQ_PRODUTOS = PASTA_BASES / "Base_Produtos.xlsx"
 # Bases de vendas por ano (a do ano corrente é atualizada diariamente).
 ARQS_VENDAS = [
-    RAIZ / "Base_2022.xlsx", RAIZ / "Base_2023.xlsx", RAIZ / "Base_2024.xlsx",
-    RAIZ / "Base_2025.xlsx", RAIZ / "Base_2026.xlsx",
+    PASTA_BASES / "Base_2022.xlsx", PASTA_BASES / "Base_2023.xlsx",
+    PASTA_BASES / "Base_2024.xlsx", PASTA_BASES / "Base_2025.xlsx",
+    PASTA_BASES / "Base_2026.xlsx",
 ]
 
 # Localidades do CD consideradas "estoque disponível para repor a loja".

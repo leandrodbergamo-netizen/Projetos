@@ -51,7 +51,7 @@ em `data/cache/dados_AAAAMMDD.pkl`. As aberturas seguintes levam **< 1s**. O
 
 ## Bases de dados (planilhas linkadas ao banco)
 
-Ficam na raiz do projeto:
+Ficam na pasta `Projetos\dados` (sobreponível pela variável de ambiente `PASTA_BASES`):
 
 | Arquivo | Conteúdo | Atualização |
 |---|---|---|
