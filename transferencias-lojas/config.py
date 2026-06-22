@@ -34,6 +34,14 @@ GRUPO_LIMITES = {
 # Limite usado quando o grupo do produto não for reconhecido.
 LIMITE_GRUPO_PADRAO = 2
 
+# Regra de grade (doadora): se ela ficaria com menos deste % dos tamanhos do pai,
+# envia TODO o estoque daquele filho (ignora o limite de peças do grupo).
+PCT_GRADE_MIN = 0.40
+
+# Template da URL da foto do produto (preencha com o padrão do seu site/CDN).
+# Campos disponíveis: {sku_pai}, {sku_filho}. Vazio -> painel sem imagem.
+URL_FOTO_TEMPLATE = os.getenv("URL_FOTO_TEMPLATE", "")
+
 # De-para entre a coluna desc_linha (Base_Produtos) e o grupo de regra acima.
 # Linhas fora deste mapa (ex.: BAZAR MATRIZ) são EXCLUÍDAS do remanejamento.
 MAPA_LINHA_GRUPO = {
@@ -73,6 +81,10 @@ CURVA_SAZONAL = RAIZ / "data" / "curva_sazonal.parquet"
 COBERTURA_SEMANAS_HIST = 8
 # Horizonte (semanas) da previsão para o cálculo de cobertura.
 COBERTURA_HORIZONTE_SEMANAS = 4
+# Mín. de dias de histórico de estoque (na janela) para usar "dias com estoque"
+# como denominador da velocidade (tira o efeito ruptura). Abaixo disso, usa a
+# janela de calendário (dt_envio+leadtime) como hoje.
+COBERTURA_MIN_DIAS_HIST = 14
 
 
 def materia_prima_de(desc_material):
@@ -84,6 +96,33 @@ def materia_prima_de(desc_material):
     if not achados:
         return "Outros"
     return min(achados)[1]
+
+
+import re as _re
+
+
+def colecao_chave(colecao) -> float:
+    """Chave de recência da coleção (maior = mais recente).
+
+    INVERNO A -> A+0.5 ; VERÃO A-B -> B ; VERÃO A -> A ; ALTO VERÃO A B -> B.
+    Coleções sem ano (PERENE, CANCELADO, vazio) -> -infinito (vão para o fim).
+    """
+    if colecao is None:
+        return float("-inf")
+    txt = str(colecao).upper()
+    anos = [int(a) for a in _re.findall(r"19\d{2}|20\d{2}", txt)]
+    if not anos:
+        return float("-inf")
+    if "INVERNO" in txt:
+        return anos[0] + 0.5
+    # VERÃO / ALTO VERÃO: usa o ano final (maior dos anos citados).
+    return float(max(anos))
+
+
+def colecoes_ordenadas(valores) -> list:
+    """Lista de coleções distintas ordenada por recência (mais recente primeiro)."""
+    unicas = {str(v) for v in valores if v is not None and str(v).strip().lower() not in ("", "nan")}
+    return sorted(unicas, key=colecao_chave, reverse=True)
 
 
 # --- Fonte de dados ---------------------------------------------------------
@@ -111,8 +150,10 @@ ARQS_VENDAS = [
 CD_LOCALIDADES_DISPONIVEIS = ["CDES Vendas SOUQ Atacado_Ecomm_Varejo"]
 
 # Histórico diário de estoque (para tirar o efeito ruptura no cálculo de giro
-# e aproximar a data de recebimento). Vai sendo acumulado a cada refresh.
-HIST_ESTOQUE = RAIZ / "data" / "hist_estoque.parquet"
+# e aproximar a data de recebimento). Acumulado em Parquet particionado por mês
+# (data/hist_estoque/AAAA-MM.parquet), gravando só linhas com qtde > 0.
+PASTA_HIST = RAIZ / "data" / "hist_estoque"
+HIST_ESTOQUE = RAIZ / "data" / "hist_estoque.parquet"  # legado (migração)
 
 # Cache diário dos dados já transformados (abre em segundos após a 1ª carga).
 PASTA_CACHE = RAIZ / "data" / "cache"

@@ -58,8 +58,8 @@ def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
     cand = venda_pai.merge(produtos, on="sku_pai")  # loja, sku_pai, venda_pai, sku_filho, descricao, grupo
     cand = cand[cand["venda_pai"] > 0]
 
-    # Só grupos com regra de limite (exclui BAZAR MATRIZ / linhas fora do mapa).
-    cand = cand[cand["grupo"].isin(config.GRUPO_LIMITES)]
+    # Só grupos (de limite) válidos (exclui BAZAR MATRIZ / linhas fora do mapa).
+    cand = cand[cand["grupo_limite"].isin(config.GRUPO_LIMITES)]
 
     # Só SKUs com estoque de status permitido em algum lugar (exclui OUTLET etc.).
     permitidos = dados.get("skus_permitidos")
@@ -91,9 +91,11 @@ def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
         chaves = list(zip(cand["sku_filho"], cand["loja"]))
         cand = cand[[c not in em_transito for c in chaves]]
 
+    saida_cols = ["loja", "linha", "grupo", "subgrupo", "colecao", "status",
+                  "sku_pai", "sku_filho", "descricao", "prev_4sem", "cobertura_pai",
+                  "score", "qtd_sugerida"]
     if cand.empty:
-        return pd.DataFrame(columns=["loja", "sku_pai", "sku_filho", "descricao", "grupo",
-                                     "prev_4sem", "cobertura_pai", "score", "qtd_sugerida"])
+        return pd.DataFrame(columns=saida_cols)
 
     # Cobertura + previsão sazonal por (loja, sku_pai) e combinação com a venda.
     pares = cand[["loja", "sku_pai"]].drop_duplicates()
@@ -106,14 +108,15 @@ def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
     cand["score"] = cand["prev_horizonte"] / (1 + cand["cobertura_pai"].fillna(0))
 
     # Quantidade: previsão do horizonte rateada por tamanho, limitada pelo grupo.
-    lim = cand["grupo"].map(config.limite_do_grupo).fillna(config.LIMITE_GRUPO_PADRAO)
+    lim = cand["grupo_limite"].map(config.limite_do_grupo).fillna(config.LIMITE_GRUPO_PADRAO)
     por_tam = (cand["prev_horizonte"] / cand["n_tam"].clip(lower=1).fillna(1)).round()
     cand["qtd_sugerida"] = por_tam.clip(lower=1, upper=lim).fillna(1).astype(int)
 
     cand["prev_4sem"] = cand["prev_horizonte"].round(1)
-    return cand[["loja", "sku_pai", "sku_filho", "descricao", "grupo",
-                 "prev_4sem", "cobertura_pai", "score", "qtd_sugerida"]] \
-        .sort_values("score", ascending=False).reset_index(drop=True)
+    for c in ("colecao", "status", "linha", "subgrupo"):
+        if c not in cand.columns:
+            cand[c] = "—"
+    return cand[saida_cols].sort_values("score", ascending=False).reset_index(drop=True)
 
 
 def doadoras(dados: dict[str, pd.DataFrame], hoje: date,
@@ -155,8 +158,29 @@ def doadoras(dados: dict[str, pd.DataFrame], hoje: date,
         .reset_index(drop=True)
 
 
-def gerar_sugestoes(nec: pd.DataFrame, doa: pd.DataFrame,
+def _info_grade(dados: dict[str, pd.DataFrame]):
+    """grade_total[sku_pai] (nº de tamanhos no cadastro) e tamanhos em estoque por
+    (loja, sku_pai). Usados na regra de grade quebrada da doadora."""
+    produtos = dados["produtos"]
+    estoque_loja = dados["estoque_loja"]
+    grade_total = produtos.groupby("sku_pai")["sku_filho"].nunique().to_dict()
+    el = estoque_loja[estoque_loja["qtd"] > 0].merge(
+        produtos[["sku_filho", "sku_pai"]], on="sku_filho", how="left")
+    tam_em_estoque = el.groupby(["loja", "sku_pai"])["sku_filho"].nunique().to_dict()
+    pai_de_filho = dict(zip(produtos["sku_filho"], produtos["sku_pai"]))
+    return grade_total, tam_em_estoque, pai_de_filho
+
+
+def gerar_sugestoes(nec: pd.DataFrame, doa: pd.DataFrame, dados: dict[str, pd.DataFrame],
                     max_lojas: int = config.MAX_LOJAS_POR_DOADORA) -> pd.DataFrame:
+    grade_total, tam_em_estoque, pai_de_filho = _info_grade(dados)
+
+    def grade_quebrada(loja, sku_pai) -> bool:
+        total = grade_total.get(sku_pai, 0)
+        if not total:
+            return False
+        return (tam_em_estoque.get((loja, sku_pai), 0) / total) < config.PCT_GRADE_MIN
+
     # Estoque disponível por (loja_doadora, sku_filho) e metadados para priorizar.
     disp: dict[tuple, int] = {}
     meta: dict[tuple, dict] = {}
@@ -186,7 +210,9 @@ def gerar_sugestoes(nec: pd.DataFrame, doa: pd.DataFrame,
             # Respeita o teto de lojas atendidas por doadora (lojas distintas).
             if loja_dest not in atendidas and len(atendidas) >= max_lojas:
                 continue
-            qtd = min(restante, disp[(doador, sku)])
+            # Grade quebrada: doadora envia TODO o estoque do filho (ignora limite).
+            quebrada = grade_quebrada(doador, need["sku_pai"])
+            qtd = disp[(doador, sku)] if quebrada else min(restante, disp[(doador, sku)])
             if qtd <= 0:
                 continue
             disp[(doador, sku)] -= qtd
@@ -195,17 +221,83 @@ def gerar_sugestoes(nec: pd.DataFrame, doa: pd.DataFrame,
             sugestoes.append({
                 "loja_doadora": doador,
                 "loja_receptora": loja_dest,
+                "linha": need.get("linha", ""),
                 "grupo": need.get("grupo", ""),
+                "subgrupo": need.get("subgrupo", ""),
+                "colecao": need.get("colecao", ""),
+                "status": need.get("status", ""),
                 "sku_pai": need["sku_pai"],
                 "sku_filho": sku,
                 "qtd": qtd,
+                "grade_quebrada": "Sim" if quebrada else "",
                 "score_receptora": round(float(need["score"]), 1),
                 "dias_parado_doadora": meta[(doador, sku)]["dias_sem_venda"],
             })
 
-    cols = ["loja_doadora", "loja_receptora", "grupo", "sku_pai", "sku_filho",
-            "qtd", "score_receptora", "dias_parado_doadora"]
+    cols = ["loja_doadora", "loja_receptora", "linha", "grupo", "subgrupo", "colecao",
+            "status", "sku_pai", "sku_filho", "qtd", "grade_quebrada",
+            "score_receptora", "dias_parado_doadora"]
     return pd.DataFrame(sugestoes, columns=cols)
+
+
+def ruptura_skus(dados: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """Ruptura a nível SKU sobre o sortimento da loja (filhos dos pais que ela carrega).
+
+    Sortimento da loja = todos os SKUs filho (status permitido) dos SKUs pai que a
+    loja CARREGA (tem ≥1 filho em estoque). Devolve um registro por (loja, sku_filho)
+    com atributos de produto e flags: ruptura, rup_sem_transito, soldout_cd.
+    """
+    produtos = dados["produtos"]
+    estoque_loja = dados["estoque_loja"]
+    estoque_cd = dados["estoque_cd"]
+    transito = dados["transito"]
+    permitidos = dados.get("skus_permitidos")
+
+    attrs = ["sku_filho", "sku_pai", "linha", "grupo", "subgrupo", "colecao", "status"]
+    attrs = [c for c in attrs if c in produtos.columns]
+    prod_pai = produtos[attrs]
+    if permitidos is not None and not permitidos.empty:
+        prod_pai = prod_pai[prod_pai["sku_filho"].isin(set(permitidos["sku_filho"]))]
+
+    carrega = (estoque_loja.merge(prod_pai[["sku_filho", "sku_pai"]], on="sku_filho")[["loja", "sku_pai"]]
+               .drop_duplicates())
+    sort = carrega.merge(prod_pai, on="sku_pai")  # loja, sku_pai, sku_filho, atributos
+
+    em_estoque = set(zip(estoque_loja["loja"], estoque_loja["sku_filho"]))
+    em_transito = set(zip(transito["loja_destino"], transito["sku_filho"])) if not transito.empty else set()
+    cd_com = set(estoque_cd.loc[estoque_cd["qtd"] > 0, "sku_filho"])
+
+    pares = list(zip(sort["loja"], sort["sku_filho"]))
+    sort["ruptura"] = [p not in em_estoque for p in pares]
+    sort["em_transito"] = [p in em_transito for p in pares]
+    sort["rup_sem_transito"] = sort["ruptura"] & (~sort["em_transito"])
+    sort["soldout_cd"] = sort["rup_sem_transito"] & (~sort["sku_filho"].isin(cd_com))
+    return sort.reset_index(drop=True)
+
+
+def _agrega_ruptura(df: pd.DataFrame, por: str) -> pd.DataFrame:
+    """Agrega flags de ruptura por uma dimensão (ex.: 'loja' ou 'subgrupo')."""
+    if df.empty:
+        return pd.DataFrame(columns=[por, "sortimento", "%Ruptura Loja",
+                                     "%Ruptura Loja+Trânsito", "%Sold Out CD"])
+    g = df.groupby(por).agg(
+        sortimento=("sku_filho", "count"),
+        rupturas=("ruptura", "sum"),
+        rup_sem_transito=("rup_sem_transito", "sum"),
+        soldout_cd=("soldout_cd", "sum"),
+    ).reset_index()
+    g["%Ruptura Loja"] = (100 * g["rupturas"] / g["sortimento"]).round(1)
+    g["%Ruptura Loja+Trânsito"] = (100 * g["rup_sem_transito"] / g["sortimento"]).round(1)
+    g["%Sold Out CD"] = (100 * g["soldout_cd"] / g["sortimento"]).round(1)
+    return g.sort_values("%Ruptura Loja", ascending=False).reset_index(drop=True)
+
+
+def ruptura_por_loja(df: pd.DataFrame) -> pd.DataFrame:
+    return _agrega_ruptura(df, "loja")
+
+
+def ruptura_por_subgrupo(df: pd.DataFrame) -> pd.DataFrame:
+    return _agrega_ruptura(df, "subgrupo")
 
 
 def calcular(dados: dict[str, pd.DataFrame], hoje: date,
@@ -216,5 +308,5 @@ def calcular(dados: dict[str, pd.DataFrame], hoje: date,
     curva = sazonalidade.carregar_curva()  # carrega 1x e reaproveita
     nec = necessidades(dados, hoje, janela_dias=janela_dias, curva=curva)
     doa = doadoras(dados, hoje, semanas_min=semanas_min)
-    sug = gerar_sugestoes(nec, doa, max_lojas=max_lojas)
+    sug = gerar_sugestoes(nec, doa, dados, max_lojas=max_lojas)
     return {"necessidades": nec, "doadoras": doa, "sugestoes": sug}

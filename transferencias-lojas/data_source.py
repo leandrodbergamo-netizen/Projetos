@@ -27,12 +27,12 @@ import snapshot
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _ler_excel(caminho, sheet):
-    """Lê uma aba; se não existir, cai na primeira aba do arquivo."""
+def _ler_excel(caminho, sheet, usecols=None):
+    """Lê uma aba (opcionalmente só algumas colunas); se não existir, cai na 1ª aba."""
     try:
-        return pd.read_excel(caminho, sheet_name=sheet)
+        return pd.read_excel(caminho, sheet_name=sheet, usecols=usecols)
     except ValueError:
-        return pd.read_excel(caminho, sheet_name=0)
+        return pd.read_excel(caminho, sheet_name=0, usecols=usecols)
 
 
 def _norm(texto) -> str:
@@ -56,7 +56,9 @@ def _build_excel(hoje: date) -> dict[str, pd.DataFrame]:
     norm_para_nome = {_norm(n): n for n in ativas["desc_nome"]}
 
     # --- Produtos (grupo via desc_linha; dt_envio p/ recebimento) -------
-    prod = _ler_excel(config.ARQ_PRODUTOS, "Consulta1")
+    cols_prod = ["sk_produto", "cod_sku_pai", "desc_item", "desc_linha", "desc_grupo_wgb",
+                 "desc_sub_grupo_wbg", "desc_material", "dt_envio", "desc_colecao", "url"]
+    prod = _ler_excel(config.ARQ_PRODUTOS, "Consulta1", usecols=cols_prod)
     prod = prod.dropna(subset=["sk_produto", "cod_sku_pai"]).drop_duplicates("sk_produto")
     dt_envio = pd.to_datetime(prod["dt_envio"], errors="coerce")
     dt_envio = dt_envio.where(dt_envio >= pd.Timestamp("2015-01-01"))  # descarta lixo (1900)
@@ -64,16 +66,29 @@ def _build_excel(hoje: date) -> dict[str, pd.DataFrame]:
         "sku_filho": prod["sk_produto"].astype("int64").astype(str),
         "sku_pai": prod["cod_sku_pai"].astype(str),
         "descricao": prod["desc_item"].astype(str),
-        "grupo": prod["desc_linha"].map(config.grupo_de_linha),          # Home/Acessórios/Roupa (limite)
-        "grupo_merc": prod["desc_grupo_wgb"].astype(str),                 # merchandising (sazonalidade)
-        "subgrupo": prod["desc_sub_grupo_wbg"].astype(str),
+        "linha": prod["desc_linha"].astype(str),                          # Linha (ROUPA/HOME/ACESSÓRIO)
+        "grupo": prod["desc_grupo_wgb"].astype(str),                      # Grupo merchandising (display/filtro)
+        "subgrupo": prod["desc_sub_grupo_wbg"].astype(str),               # Subgrupo (BLUSA/COLAR)
+        "colecao": prod["desc_colecao"].astype(str),                      # coleção (filtro/tabela)
+        "grupo_limite": prod["desc_linha"].map(config.grupo_de_linha),   # Home/Acessórios/Roupa (limite de peças)
+        "grupo_merc": prod["desc_grupo_wgb"].astype(str),                 # = grupo (usado por cobertura/sazonalidade)
         "materia": prod["desc_material"].map(config.materia_prima_de),    # matéria-prima predominante
         "dt_envio": dt_envio.values,
+        "foto_url": prod["url"].astype("string"),                         # foto do produto (coluna W)
     })
 
-    # --- Estoque: filtra status permitidos para remanejamento -----------
+    # --- Estoque -------------------------------------------------------
     est = _ler_excel(config.ARQ_ESTOQUE, "Consulta1")
     est["sku_filho"] = est["sk_produto"].astype("int64").astype(str)
+
+    # Status do produto por SKU (foto atual) — antes de filtrar, para a tabela/filtros.
+    sku_status = (est.dropna(subset=["desc_status_produto"])
+                  .groupby("sku_filho")["desc_status_produto"].first()
+                  .rename("status").reset_index())
+    produtos = produtos.merge(sku_status, on="sku_filho", how="left")
+    produtos["status"] = produtos["status"].fillna("—")
+
+    # Filtra status permitidos para remanejamento.
     est = est[est["desc_status_produto"].isin(config.STATUS_ESTOQUE_PERMITIDOS)]
 
     # Estoque em loja (status Estoque, localidade de loja válida).
@@ -99,7 +114,9 @@ def _build_excel(hoje: date) -> dict[str, pd.DataFrame]:
                 .reset_index().rename(columns={"qtde": "qtd"}))
 
     # --- Vendas (ano corrente) ------------------------------------------
-    ven = _ler_excel(config.ARQS_VENDAS[-1], "Base_Vendas")
+    cols_ven = ["dt_transacao", "sk_produto", "cod_sku_pai", "qtd_produto",
+                "flag_liquidacao", "tipo_venda", "desc_nome"]
+    ven = _ler_excel(config.ARQS_VENDAS[-1], "Base_Vendas", usecols=cols_ven)
     ven = ven[ven["tipo_venda"] == "venda"].copy()
     ven["loja"] = ven["desc_nome"].map(lambda n: norm_para_nome.get(_norm(n)))
     ven = ven.dropna(subset=["loja", "cod_sku_pai"])
@@ -120,7 +137,6 @@ def _build_excel(hoje: date) -> dict[str, pd.DataFrame]:
     receb_envio = receb_envio.dropna(subset=["data_recebimento"])[["loja", "sku_filho", "data_recebimento"]]
 
     snap = estoque_loja[["loja", "sku_filho", "qtd"]].rename(columns={"qtd": "qtde"})
-    snap["status"] = "Estoque"
     snapshot.gravar_snapshot(snap, hoje)
     receb_hist = snapshot.recebimento_estimado()
 
@@ -176,9 +192,12 @@ def carregar_mock(hoje: date | None = None) -> dict[str, pd.DataFrame]:
     produtos = pd.DataFrame(
         [{"sku_filho": f"{pai}-{tam}", "sku_pai": pai,
           "descricao": f"Produto {pai} tam {tam}",
-          "grupo": grupos[int(pai[-1]) % 3],
-          "grupo_merc": grupos[int(pai[-1]) % 3], "subgrupo": "GERAL",
-          "materia": "Não informado"}
+          "linha": grupos[int(pai[-1]) % 3].upper(), "colecao": "INVERNO 2026",
+          "status": "NOVIDADE",
+          "grupo": "GRUPO " + grupos[int(pai[-1]) % 3], "subgrupo": "GERAL",
+          "grupo_limite": grupos[int(pai[-1]) % 3],
+          "grupo_merc": "GRUPO " + grupos[int(pai[-1]) % 3],
+          "materia": "Não informado", "foto_url": ""}
          for pai in pais for tam in tamanhos]
     )
     filhos = produtos["sku_filho"].tolist()

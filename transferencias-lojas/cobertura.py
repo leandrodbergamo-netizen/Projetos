@@ -14,11 +14,32 @@ import pandas as pd
 import config
 import feriados
 import sazonalidade
+import snapshot
 
 
 def _moda(s: pd.Series):
     m = s.mode()
     return m.iloc[0] if not m.empty else None
+
+
+def _semanas_disponiveis(pares: pd.DataFrame, produtos: pd.DataFrame, hoje: date,
+                         semanas_hist: int):
+    """Dias COM estoque por (loja, sku_pai) na janela, a partir do histórico.
+
+    Retorna (dict[(loja, sku_pai)] -> dias, usar_hist). usar_hist só é True quando
+    o histórico tem dias suficientes na janela (COBERTURA_MIN_DIAS_HIST).
+    """
+    hist = snapshot.carregar_hist()
+    if hist.empty:
+        return {}, False
+    corte = pd.Timestamp(hoje).normalize() - pd.Timedelta(weeks=semanas_hist)
+    hw = hist[hist["data"] >= corte]
+    if hw["data"].nunique() < config.COBERTURA_MIN_DIAS_HIST:
+        return {}, False
+    hw = hw.merge(produtos[["sku_filho", "sku_pai"]], on="sku_filho", how="left")
+    hw = hw[hw["sku_pai"].isin(set(pares["sku_pai"]))]
+    av = hw.groupby(["loja", "sku_pai"])["data"].nunique()
+    return av.to_dict(), True
 
 
 def segmento_por_pai(produtos: pd.DataFrame) -> pd.DataFrame:
@@ -57,6 +78,17 @@ def cobertura_receptoras(pares: pd.DataFrame, produtos: pd.DataFrame,
     df = pares.merge(vp, on=["loja", "sku_pai"], how="left").fillna({"qtd_hist": 0})
     df = df.merge(seg, on="sku_pai", how="left")
 
+    # Semanas efetivas para a velocidade: dias COM estoque (histórico), quando
+    # houver histórico maduro; senão, a janela de calendário (sem efeito ruptura).
+    avail, usar_hist = _semanas_disponiveis(pares, produtos, hoje, semanas_hist)
+
+    def _semanas_eff(loja, sku_pai) -> float:
+        if usar_hist:
+            ad = avail.get((loja, sku_pai), 0)
+            if ad > 0:
+                return max(ad / 7.0, 1.0)
+        return float(semanas_hist)
+
     # Fatores sazonais por segmento (memoizado).
     cache: dict = {}
 
@@ -70,12 +102,13 @@ def cobertura_receptoras(pares: pd.DataFrame, produtos: pd.DataFrame,
             cache[key] = (mean_pass if mean_pass > 0 else 1.0, soma_fut)
         return cache[key]
 
-    prev = []
+    prev, vel = [], []
     for r in df.itertuples(index=False):
         mean_pass, soma_fut = fatores(r.grupo_merc, r.subgrupo, r.materia)
-        deseason = (r.qtd_hist / semanas_hist) / mean_pass
-        prev.append(deseason * soma_fut)
-    df["vel_semana"] = df["qtd_hist"] / semanas_hist
+        vsem = r.qtd_hist / _semanas_eff(r.loja, r.sku_pai)
+        vel.append(vsem)
+        prev.append((vsem / mean_pass) * soma_fut)
+    df["vel_semana"] = vel
     df["prev_horizonte"] = prev
 
     # Estoque do pai na loja e cobertura.
