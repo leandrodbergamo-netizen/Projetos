@@ -305,7 +305,10 @@ def calcular(dados: dict[str, pd.DataFrame], hoje: date,
              max_lojas: int = config.MAX_LOJAS_POR_DOADORA,
              janela_dias: int = config.JANELA_VENDAS_DIAS) -> dict[str, pd.DataFrame]:
     """Roda o fluxo completo e devolve necessidades, doadoras e sugestões."""
-    curva = sazonalidade.carregar_curva()  # carrega 1x e reaproveita
+    # Curva: vinda do banco (nuvem) se presente; senão, do parquet local.
+    curva = dados.get("curva")
+    if curva is None:
+        curva = sazonalidade.carregar_curva()
     nec = necessidades(dados, hoje, janela_dias=janela_dias, curva=curva)
     doa = doadoras(dados, hoje, semanas_min=semanas_min)
     sug = gerar_sugestoes(nec, doa, dados, max_lojas=max_lojas)

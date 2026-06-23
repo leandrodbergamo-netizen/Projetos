@@ -130,16 +130,34 @@ python sazonalidade.py
 
 > A construção é pesada (~5 min) e fica em `data/curva_sazonal.parquet` (cache).
 
+## Publicar na nuvem (Supabase + Streamlit Cloud)
+
+Para compartilhar um link com o time, o app sobe no **Streamlit Community Cloud**
+(lê os dados do **Supabase**, um Postgres na nuvem). O Excel/refresh continua só no
+seu PC; ele publica os dados preparados no Supabase 1×/dia.
+
+Fluxo: `tarefa_diaria.py` (agendado no PC) → `refresh_bases.py` (atualiza Excel) →
+`publica_supabase.py` (grava as tabelas no Postgres) → app na nuvem lê e mostra.
+
+Configuração:
+- No PC: `DATABASE_URL` no `.env` (string do **Pooler** do Supabase). Teste com
+  `python publica_supabase.py`.
+- Na nuvem (Streamlit Cloud → Settings → Secrets):
+  `FONTE_DADOS="supabase"` e `DATABASE_URL="..."`. Main file: `transferencias-lojas/app.py`.
+- App **privado**: restrinja os visualizadores aos e-mails do time.
+
 ## Estrutura do código
 
 | Arquivo | Responsabilidade |
 |---|---|
 | `app.py` | Interface Streamlit |
 | `config.py` | Parâmetros, limites por grupo, matéria-prima, mapeamento das bases |
-| `data_source.py` | Leitura das bases reais (e modo `mock` para teste) |
+| `data_source.py` | Leitura dos dados: Excel (PC), Supabase (nuvem) ou mock |
 | `engine.py` | Regras: ruptura, elegibilidade, score, alocação |
-| `painel.py` | Matrizes loja × SKU pai com heatmap |
+| `painel.py` | Painéis loja × SKU pai (giro, vendas/estoque) |
 | `snapshot.py` | Histórico diário de estoque (recebimento/velocidade) |
 | `sazonalidade.py` | Curva sazonal semanal (previsão/cobertura) |
 | `feriados.py` | Calendário nacional e efeito de emendas |
 | `refresh_bases.py` | Refresh diário das planilhas via Excel (Power Query) |
+| `publica_supabase.py` | Publica os dados preparados no Supabase (Postgres) |
+| `tarefa_diaria.py` | Orquestra refresh + publicação (agendado no PC) |

@@ -248,7 +248,65 @@ def carregar_mock(hoje: date | None = None) -> dict[str, pd.DataFrame]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Fonte SUPABASE (Postgres) — usada pelo app hospedado na nuvem
+# ---------------------------------------------------------------------------
+# Tabelas gravadas pelo publica_supabase.py (mesmo contrato de saída).
+TABELAS = ["produtos", "estoque_loja", "estoque_cd", "transito",
+           "vendas", "recebimento", "skus_permitidos"]
+
+
+def _segredo(nome: str) -> str:
+    """Lê uma configuração de env var ou dos secrets do Streamlit (nuvem)."""
+    import os
+    v = os.getenv(nome)
+    if v:
+        return v
+    try:
+        import streamlit as st
+        if nome in st.secrets:
+            return str(st.secrets[nome])
+    except Exception:
+        pass
+    return ""
+
+
+def _fonte() -> str:
+    return _segredo("FONTE_DADOS") or config.FONTE_DADOS
+
+
+def db_url() -> str:
+    return _segredo("DATABASE_URL")
+
+
+def carregar_supabase(hoje: date | None = None) -> dict[str, pd.DataFrame]:
+    from sqlalchemy import create_engine, text
+
+    url = db_url()
+    if not url:
+        raise RuntimeError("DATABASE_URL não configurada (env ou st.secrets).")
+    eng = create_engine(url, pool_pre_ping=True)
+    dados: dict[str, pd.DataFrame] = {}
+    with eng.connect() as con:
+        for n in TABELAS:
+            dados[n] = pd.read_sql(text(f"select * from {n}"), con)
+        try:
+            dados["curva"] = pd.read_sql(text("select * from curva_sazonal"), con)
+        except Exception:
+            dados["curva"] = None
+
+    # Recompõe tipos de data perdidos na ida/volta.
+    for col, nome in [("data", "vendas"), ("data_recebimento", "recebimento"), ("dt_envio", "produtos")]:
+        df = dados.get(nome)
+        if df is not None and col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
+    return dados
+
+
 def carregar_dados(hoje: date | None = None) -> dict[str, pd.DataFrame]:
-    if config.FONTE_DADOS == "mock":
+    fonte = _fonte()
+    if fonte == "mock":
         return carregar_mock(hoje)
+    if fonte in ("supabase", "db", "postgres"):
+        return carregar_supabase(hoje)
     return carregar_excel(hoje)

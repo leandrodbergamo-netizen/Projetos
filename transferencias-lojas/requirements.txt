@@ -6,5 +6,7 @@ matplotlib>=3.7
 openpyxl>=3.1
 xlsxwriter>=3.1
 pyarrow>=14.0
+SQLAlchemy>=2.0
+psycopg2-binary>=2.9
 # Opcional (só para refresh_bases.py atualizar o Power Query via Excel no Windows):
 # pywin32>=306
