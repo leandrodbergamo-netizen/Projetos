@@ -43,12 +43,22 @@ def publicar() -> None:
     else:
         print("AVISO: curva_sazonal.parquet não encontrada — rode 'python sazonalidade.py'.")
 
+    from sqlalchemy import text
+
     for nome in tabelas:
         df = dados[nome]
         t0 = time.time()
         df.to_sql(nome, eng, if_exists="replace", index=False,
                   chunksize=5000, method="multi")
         print(f"  {nome}: {len(df)} linhas em {time.time()-t0:.1f}s", flush=True)
+
+    # Habilita RLS (sem policies) em cada tabela: bloqueia a leitura pela Data API
+    # pública do Supabase. O app conecta como 'postgres' (dono das tabelas) e
+    # ignora RLS, então continua lendo tudo normalmente.
+    with eng.begin() as con:
+        for nome in tabelas:
+            con.execute(text(f'ALTER TABLE public."{nome}" ENABLE ROW LEVEL SECURITY'))
+    print("RLS habilitado nas tabelas.")
 
     eng.dispose()
     print("Publicação concluída.")
