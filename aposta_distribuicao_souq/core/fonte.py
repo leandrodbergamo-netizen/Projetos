@@ -17,6 +17,14 @@ import os
 
 import pandas as pd
 
+# Carrega o .env do projeto (no PC). Na nuvem não há .env — lá valem os Secrets.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except Exception:
+    pass
+
 PREFIXO = "aposta_"
 TABELAS = ("produtos", "vendas", "lojas", "faixas")
 
