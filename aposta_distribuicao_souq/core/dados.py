@@ -63,6 +63,12 @@ def carregar_produtos(caminho: Optional[str] = None, forcar: bool = False) -> pd
 
 
 def carregar_lojas(caminho: Optional[str] = None, forcar: bool = False) -> pd.DataFrame:
+    """Cadastro de lojas. Na nuvem vem da tabela publicada (não há Excel lá)."""
+    from core import fonte
+
+    if fonte.usa_supabase():
+        return fonte.ler_tabela("lojas")
+
     def build():
         p = dados_dir(caminho) / "Base_Lojas.xlsx"
         return pd.read_excel(p, sheet_name="Lojas")

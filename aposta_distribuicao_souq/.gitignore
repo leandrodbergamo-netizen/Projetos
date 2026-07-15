@@ -1,3 +1,8 @@
+# Credenciais — NUNCA versionar (o .env.example é o template público)
+.env
+.env.*
+!.env.example
+
 # Cache de dados (parquet gerado a partir dos Excel) — não versionar
 .cache_dados/
 

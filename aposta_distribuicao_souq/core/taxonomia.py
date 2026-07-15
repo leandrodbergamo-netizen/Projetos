@@ -121,10 +121,17 @@ def agrupar_cor(desc_cor) -> str:
 # --------------------------------------------------------------------------- #
 @lru_cache(maxsize=1)
 def _tabela_faixas(caminho: Optional[str] = None) -> pd.DataFrame:
+    """Faixas de preço já normalizadas. Na nuvem vem da tabela publicada."""
+    from core import fonte
+
+    if fonte.usa_supabase():
+        return fonte.ler_tabela("faixas")
+
     base = dados_dir(caminho)
     arqs = sorted(base.glob("Faixas de Pre*.xlsx"))
     if not arqs:
-        return pd.DataFrame(columns=["grupo", "subgrupo", "faixa", "moq", "de", "ate"])
+        return pd.DataFrame(columns=["grupo", "subgrupo", "faixa", "moq", "de", "ate",
+                                     "grupo_n", "subgrupo_n"])
     df = pd.read_excel(arqs[-1], sheet_name=0)  # aba revisada (1a)
     ren = {
         "Grupo": "grupo", "Subgrupo": "subgrupo", "Faixa de Preço": "faixa",
