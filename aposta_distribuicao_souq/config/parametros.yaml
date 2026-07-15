@@ -14,3 +14,9 @@ max_por_tamanho_loja: 4       # nunca mais que 4 peças do mesmo SKU-tamanho por
 # Escopo e sazonalidade.
 min_amostra_curva: 800
 desde_colecao: 2022.0
+
+# Espelho sem data de liquidacao: se vendeu nos ultimos N dias, considera-se que
+# ainda esta a full price e a janela vai ate hoje (97% da safra corrente vendeu
+# nos ultimos 60 dias). Quem parou antes disso saiu de circulacao sem registro:
+# a janela para na ultima venda, para nao diluir a velocidade em anos de prateleira.
+dias_para_considerar_ativo: 60

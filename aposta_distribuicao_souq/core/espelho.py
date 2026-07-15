@@ -161,7 +161,7 @@ def janelas_full_price(produtos_prep: pd.DataFrame) -> dict:
 def enriquecer_velocidade(
     candidatos: pd.DataFrame, vendas_fp: pd.DataFrame, curva: pd.DataFrame,
     ecom_locs: Optional[set] = None, apenas_com_venda: bool = True,
-    janelas: Optional[dict] = None,
+    janelas: Optional[dict] = None, ativo_ate=None, dias_ativo: int = 60,
 ) -> pd.DataFrame:
     """Anexa unidades/lojas/velocidade desazonalizada a cada candidato e ordena
     por unidades (mais vendidos primeiro).
@@ -174,7 +174,8 @@ def enriquecer_velocidade(
     linhas = []
     for sku in candidatos["cod_sku_pai"]:
         ve = velocidade_por_loja_desaz(vendas_fp, sku, curva, ecom_locs,
-                                       janela=janelas.get(sku))
+                                       janela=janelas.get(sku), ativo_ate=ativo_ate,
+                                       dias_ativo=dias_ativo)
         linhas.append({
             "cod_sku_pai": sku,
             "unidades": ve.unidades if ve else 0,
@@ -207,7 +208,7 @@ class VelocidadeEspelho:
 def velocidade_por_loja_desaz(
     vendas_fp: pd.DataFrame, cod_sku_pai: str, curva: pd.DataFrame,
     ecom_locs: Optional[set] = None, col_loja: str = "sk_localidade",
-    janela: Optional[tuple] = None,
+    janela: Optional[tuple] = None, ativo_ate=None, dias_ativo: int = 60,
 ) -> Optional[VelocidadeEspelho]:
     """Velocidade desazonalizada de um espelho, separando física (por loja) e Ecom.
 
@@ -222,6 +223,13 @@ def velocidade_por_loja_desaz(
     A janela nunca encurta o período nem descarta venda: se houve venda full price
     antes da entrada presumida (o `dt_envio + 7` é premissa) ou depois da
     liquidação (o status é do catálogo, a flag é da transação), vale a venda real.
+
+    `ativo_ate` (hoje) fecha a janela dos produtos **sem** data de liquidação que
+    ainda estão vendendo — 97% da safra corrente vendeu nos últimos 60 dias e
+    segue a full price, então a janela vai até hoje (incluindo as semanas paradas).
+    Quem não vende há mais de `dias_ativo` já saiu de circulação sem registro de
+    liquidação: para esse, a janela para na última venda, senão a velocidade seria
+    diluída por anos de prateleira que não existiram.
     """
     if vendas_fp.empty or "cod_sku_pai" not in vendas_fp.columns:
         return None
@@ -230,12 +238,18 @@ def velocidade_por_loja_desaz(
         return None
 
     dt0, dt1 = sub["dt_transacao"].min(), sub["dt_transacao"].max()
+    tem_liquidacao = False
     if janela:
         ini, fim = janela
         if ini is not None and pd.notna(ini):
             dt0 = min(dt0, pd.Timestamp(ini))
         if fim is not None and pd.notna(fim):
             dt1 = max(dt1, pd.Timestamp(fim))
+            tem_liquidacao = True
+    if not tem_liquidacao and ativo_ate is not None:
+        hoje = pd.Timestamp(ativo_ate)
+        if (hoje - dt1).days <= dias_ativo:   # ainda vendendo => segue a full price
+            dt1 = hoje
 
     ecom_locs = ecom_locs or set()
     is_ecom = sub[col_loja].isin(ecom_locs)

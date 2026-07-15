@@ -210,6 +210,31 @@ class TestJanelaFullPrice:
         b = velocidade_por_loja_desaz(_vendas(reg), "X", CURVA_NEUTRA)
         assert a.semanas_ativas == b.semanas_ativas
 
+    def test_sem_liquidacao_mas_ainda_vendendo_vai_ate_hoje(self):
+        # produto da safra corrente: vendeu ha 5 dias e nao tem liquidacao =>
+        # segue a full price, entao as semanas paradas contam ate hoje.
+        reg = [("2026-05-01", 1, 10, "X"), ("2026-07-10", 1, 1, "X")]
+        ve = velocidade_por_loja_desaz(_vendas(reg), "X", CURVA_NEUTRA,
+                                       janela=(pd.Timestamp("2026-05-01"), None),
+                                       ativo_ate=pd.Timestamp("2026-07-15"))
+        assert ve.semanas_ativas == pytest.approx(11.7, abs=0.2)   # 01/05 -> 15/07
+
+    def test_sem_liquidacao_e_parado_ha_meses_para_na_ultima_venda(self):
+        # produto antigo que sumiu sem registrar liquidacao: esticar ate hoje
+        # diluiria a velocidade em anos de prateleira que nunca existiram.
+        reg = [("2023-01-02", 1, 10, "X"), ("2023-03-06", 1, 5, "X")]
+        ve = velocidade_por_loja_desaz(_vendas(reg), "X", CURVA_NEUTRA,
+                                       janela=(pd.Timestamp("2023-01-02"), None),
+                                       ativo_ate=pd.Timestamp("2026-07-15"))
+        assert ve.semanas_ativas < 15          # ~9 semanas, nao ~180
+
+    def test_liquidacao_conhecida_ignora_a_regra_de_hoje(self):
+        reg = [("2026-05-01", 1, 10, "X"), ("2026-07-10", 1, 1, "X")]
+        ve = velocidade_por_loja_desaz(_vendas(reg), "X", CURVA_NEUTRA,
+                                       janela=(pd.Timestamp("2026-05-01"), pd.Timestamp("2026-07-12")),
+                                       ativo_ate=pd.Timestamp("2026-12-31"))
+        assert ve.semanas_ativas == pytest.approx(11.3, abs=0.2)   # para na liquidacao
+
 
 class TestGradeCompleta:
     def _distribui(self, garantir, aposta=30):

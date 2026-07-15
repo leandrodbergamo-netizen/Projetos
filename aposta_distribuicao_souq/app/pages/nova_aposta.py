@@ -95,7 +95,10 @@ def render() -> None:
 
     total_bruto = len(cand)
     janelas = janelas_full_price(pp)
-    cand = enriquecer_velocidade(cand, fp, curva, ctx["ecom_locs"], janelas=janelas)
+    hoje = pd.Timestamp(date.today())
+    dias_ativo = int(cfg.get("dias_para_considerar_ativo", 60))
+    cand = enriquecer_velocidade(cand, fp, curva, ctx["ecom_locs"], janelas=janelas,
+                                 ativo_ate=hoje, dias_ativo=dias_ativo)
     if cand.empty:
         st.warning(f"Os {total_bruto} candidatos encontrados nunca venderam full price — "
                    "não servem de espelho. Afrouxe os filtros.")
@@ -139,7 +142,8 @@ def render() -> None:
 
     # ---------------------------------------------------------------- projetar
     if st.button("Projetar aposta", type="primary", disabled=not escolhidos):
-        vels = [velocidade_por_loja_desaz(fp, s, curva, ctx["ecom_locs"], janela=janelas.get(s))
+        vels = [velocidade_por_loja_desaz(fp, s, curva, ctx["ecom_locs"], janela=janelas.get(s),
+                                          ativo_ate=hoje, dias_ativo=dias_ativo)
                 for s in escolhidos]
         vels = [v for v in vels if v]
         if not vels:
