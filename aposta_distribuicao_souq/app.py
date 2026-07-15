@@ -23,4 +23,20 @@ st.sidebar.divider()
 botao_recarregar()
 
 page = PAGES[selection]
-page.render()
+try:
+    page.render()
+except Exception as erro:
+    from core import fonte
+
+    if not fonte.usa_supabase():
+        raise
+    # Na nuvem o Streamlit censura a mensagem da exceção; st.error não é
+    # censurado, então mostramos aqui o diagnóstico (sem a senha).
+    st.error(
+        "Falha ao ler os dados do Supabase.\n\n"
+        f"**Conexão em uso:** `{fonte.diagnostico()}`\n\n"
+        f"**Erro:** `{str(erro)[:300]}`\n\n"
+        "Se `usuario_tem_ref_do_projeto=False`, o usuário do Secret está sem o "
+        "sufixo `.<ref-do-projeto>` — o pooler responde *tenant/user not found*."
+    )
+    st.stop()

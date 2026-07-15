@@ -99,6 +99,26 @@ def engine():
     return create_engine(url, pool_pre_ping=True)
 
 
+def diagnostico() -> str:
+    """Resumo da conexão em uso, **sem a senha** — para depurar na nuvem.
+
+    O Streamlit Cloud censura a mensagem de exceção ("error message is
+    redacted"), então este texto é exibido via st.error, que não é censurado.
+    """
+    from urllib.parse import urlparse
+
+    u = db_url()
+    if not u:
+        return "DATABASE_URL vazia (Secret não configurado)."
+    p = urlparse(u)
+    usuario = p.username or ""
+    tenant_ok = "." in usuario  # o pooler exige postgres.<project_ref>
+    return (
+        f"esquema={p.scheme} | usuario={usuario!r} | host={p.hostname} | "
+        f"porta={p.port} | banco={p.path} | usuario_tem_ref_do_projeto={tenant_ok}"
+    )
+
+
 def ler_tabela(nome: str) -> pd.DataFrame:
     """Lê `aposta_<nome>` do Postgres, recompondo as colunas de data."""
     from sqlalchemy import text
