@@ -1,0 +1,11 @@
+aproveitamento: 0.70
+reserva_cd_pct: 0.20
+cobertura_maxima_semanas: 4
+horizonte_semanas: 12
+min_amostra_curva: 800
+desde_colecao: 2022.0
+limiar_liquidacao_desc: 0.25
+dias_liquidacao_consecutivos: 3
+min_transacoes_dia: 3
+min_unidades_curva: 100
+min_produtos_espelho: 5

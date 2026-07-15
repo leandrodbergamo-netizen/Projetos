@@ -1,0 +1,86 @@
+# Agrupamento de cor dos produtos Souq / linha ROUPA.
+#
+# Regra (core/taxonomia.py -> agrupar_cor):
+#   - normaliza (maiúsculas, sem acento) e procura no `mapa` abaixo;
+#   - cor não mapeada -> mantém a própria cor (title case).
+#
+# Combinações do usuário já aplicadas:
+#   azul denim / azul claro / azul -> Azul  (AZUL MARINHO fica SEPARADO)
+#   pink -> Rosa ; prata -> Cinza
+# Variantes claro/escuro são fundidas na cor base. Padronagens (estampado,
+# listrado, xadrez, tie dye, bicolor) vão para o bucket "Estampado".
+# Este arquivo é validável em reunião.
+
+mapa:
+  # neutros
+  PRETO: Preto
+  PT: Preto
+  BRANCO: Branco
+  OFF WHITE: Branco
+  CRU: Branco
+  CINZA: Cinza
+  PRATA: Cinza
+  GRAFITE: Cinza
+  # azuis
+  AZUL: Azul
+  AZUL CLARO: Azul
+  AZUL DENIM: Azul
+  AZUL BEBE: Azul
+  AZUL ESCURO: Azul
+  AZUL MARINHO: Azul Marinho
+  MARINHO: Azul Marinho
+  # verdes
+  VERDE: Verde
+  VERDE CLARO: Verde
+  VERDE ESCURO: Verde
+  VERDE MILITAR: Verde
+  TURQUESA: Verde
+  # vermelhos / rosas
+  VERMELHO: Vermelho
+  VERMELHO ESCURO: Vermelho
+  VINHO: Vinho
+  BORDO: Vinho
+  ROSA: Rosa
+  ROSA CLARO: Rosa
+  ROSA ESCURO: Rosa
+  PINK: Rosa
+  CORAL: Coral
+  # amarelos / laranjas
+  AMARELO: Amarelo
+  AMARELO CLARO: Amarelo
+  AMARELO ESCURO: Amarelo
+  MOSTARDA: Amarelo
+  LARANJA: Laranja
+  FERRUGEM: Ferrugem
+  # marrons / terrosos / bege
+  MARROM: Marrom
+  MARROM ESCURO: Marrom
+  CARAMELO: Marrom
+  BEGE: Bege
+  AVEIA: Bege
+  NUDE: Bege
+  NATURAL: Bege
+  CAQUI: Bege
+  # roxos
+  ROXO: Roxo
+  LILAS: Roxo
+  # padronagens (não são cor lisa)
+  ESTAMPADO: Estampado
+  LISTRADO: Estampado
+  XADREZ: Estampado
+  TYE DIE: Estampado
+  TIE DYE: Estampado
+  BICOLOR: Estampado
+  COLORIDO: Estampado
+  ESTAMPA: Estampado
+  FLORAL: Estampado
+  MESCLA: Estampado
+  # metálicos / terrosos residuais
+  KRAFT: Bege
+  BRONZE: Marrom
+  COBRE: Marrom
+  DOURADO: Dourado
+  # sem cor definida
+  INDEFINIDO: Indefinido
+
+bucket_indefinido: Indefinido

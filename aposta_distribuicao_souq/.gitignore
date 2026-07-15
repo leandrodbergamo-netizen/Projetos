@@ -1,0 +1,10 @@
+# Cache de dados (parquet gerado a partir dos Excel) — não versionar
+.cache_dados/
+
+# Ambiente virtual e artefatos
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.streamlit/secrets.toml

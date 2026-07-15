@@ -1,0 +1,87 @@
+# Agrupamento de matéria-prima ("tecido") dos produtos Souq / linha ROUPA.
+#
+# Ordem de decisão (implementada em core/taxonomia.py -> agrupar_material):
+#   1. grupo (desc_grupo_wgb) contém TRICOT -> Tricot ; contém JEANS -> Jeans
+#   2. material contém "LINHO" -> Linho   (matéria-prima predominante — regra de negócio)
+#   3. primeira FIBRA citada no material (mapa `fibras`) -> aquele bucket
+#   4. FORNECEDOR com composição informada (mapa `fornecedores`) -> fibra predominante
+#   5. TERMO DE TECELAGEM/CONSTRUÇÃO (mapa `tecelagens`) -> fibra predominante pesquisada
+#   6. nada reconhecido -> "Outros"
+#
+# Fibras explícitas vencem tudo: "ALGODÃO (JACQUARD)" -> Algodão.
+# Fornecedor vem ANTES de tecelagem porque composição informada vence inferência
+# genérica: "CROCHE ZOE - BETA" -> Poliéster (composição real da Beta), não Algodão.
+# Ajuste livre este arquivo para refinar a classificação; é validável em reunião.
+
+# --- palavra-chave de fibra -> bucket (varre a 1a citada no texto) ---
+fibras:
+  SEDA: Seda
+  VISCOSE: Viscose
+  RAYON: Viscose        # rayon = viscose
+  ALGODAO: Algodão
+  POLIESTER: Poliéster
+  POLIAMIDA: Poliamida
+  ACRILICO: Acrílico
+  ACETATO: Acetato
+  MODAL: Modal
+  ELASTANO: Elastano
+
+# --- termo de tecelagem/construção -> fibra predominante (varejo moda fem. BR) ---
+# Fontes (casos não-óbvios) pesquisadas: laise/algodão (beteltecidos), crepe/poliéster
+# (audaces), ponto roma/viscose, crepe marrocain/poliéster, matelassê/poliéster.
+tecelagens:
+  TRICOT: Tricot         # material "TRICOT ..." mesmo quando o grupo não é TRICOT
+  JEANS: Jeans
+  DENIM: Jeans
+  LINTE: Linho           # LINTÊ = mescla predominante de linho
+  TAFETA: Poliéster
+  TAFETTA: Poliéster
+  TENCEL: Viscose        # lyocell = celulósica da família da viscose
+  LYOCELL: Viscose
+  LAISE: Algodão
+  CAMBRAIA: Algodão
+  RENDA: Poliamida
+  GUIPIER: Poliamida
+  GUIPIR: Poliamida
+  TULE: Poliamida
+  JACQUARD: Poliéster
+  CREPE: Poliéster       # crepe genérico; viscocrepe é pego antes pela fibra VISCOSE
+  BORDADO: Algodão
+  CROCHE: Algodão
+  CETIM: Poliéster
+  CHIFFON: Poliéster
+  GEORGETTE: Poliéster
+  MUSSELINE: Poliéster
+  SARJA: Algodão
+  TRICOLINE: Algodão
+  PIQUET: Algodão
+  PIQUE: Algodão
+  MOLETOM: Algodão
+  MOLETON: Algodão
+  MATELASSE: Poliéster
+  MARROCAN: Poliéster
+  LUREX: Poliéster
+
+# --- fornecedor/artigo -> fibra predominante, pela COMPOSIÇÃO informada pelo negócio ---
+# Estes nomes não denotam fibra por si; a composição veio da ficha técnica.
+# Mapeado pela maior % da composição.
+fornecedores:
+  CHLOE: Algodão                # 70,5% algodão / 22% viscose / 7,5% elastano
+  SOLIANI: Algodão              # 100% algodão
+  PARISE: Viscose               # 100% viscose (pega PARISE ESTAMPADO e ESTAMP. G8522)
+  PRADA: Viscose                # 95,5% viscose / 4,5% elastano
+  CORDOBA: Viscose              # 100% viscose
+  LEANA: Viscose                # 100% viscose
+  DUMBO: Viscose                # 100% viscose
+  INFINITY: Viscose             # 94% viscose / 6% elastano
+  MONTARIA: Viscose             # 60% viscose / 35,5% poliamida / 4,5% elastano
+  BETA: Poliéster               # 100% poliéster
+  MALHA TECNO TWILL: Poliéster  # 95% poliéster / 5% elastano
+  NILO TRIPOLI: Linho           # 55% linho / 45% viscose (chave específica: NILO LEVE não entra)
+
+# Sem composição informada -> seguem em "Outros": JACK STRETCH, NILO LEVE, TECIDO XL.
+# Nomes de tecelagem/fornecedor que aparecem apenas como sufixo de um material que já
+# traz a fibra (OTIMOTEX, TEXPRIMA, RENAUXVIEW, LANABELLA, ATENAS, ARPEGGIO, RADIOSA,
+# DALILA) não precisam de entrada: a fibra explícita do texto já resolve.
+
+bucket_indefinido: Outros
