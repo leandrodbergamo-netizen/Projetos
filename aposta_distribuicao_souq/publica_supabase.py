@@ -32,6 +32,8 @@ COLS_PRODUTOS = [
     "desc_sub_grupo_wbg", "desc_grupo_wgb", "desc_cor", "desc_tamanho",
     "desc_manga", "desc_comprimento", "desc_fit", "desc_material", "dt_envio",
     "url", "preco", "grupo_material", "cor_grupo", "faixa", "rank_colecao",
+    # janela full price (entrada em loja -> liquidação): denominador da velocidade
+    "dt_entrada_loja", "dt_liquidacao",
 ]
 
 

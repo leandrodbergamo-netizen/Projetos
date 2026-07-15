@@ -17,8 +17,9 @@ from app.dados_app import (contexto_lojas, opcoes, opcoes_por_relevancia,
 from core.config_utils import load_config
 from core.dados import (colecoes_projetaveis, curva_tamanhos, fim_periodo_saudavel,
                         participacao_lojas, semanas_ate)
-from core.espelho import (candidatos_espelho, enriquecer_velocidade, projetar_aposta,
-                          velocidade_de_cada_loja, velocidade_por_loja_desaz)
+from core.espelho import (candidatos_espelho, enriquecer_velocidade, janelas_full_price,
+                          projetar_aposta, velocidade_de_cada_loja,
+                          velocidade_por_loja_desaz)
 from core.regra_distribuicao import participacao_com_loja_nova
 from core.sazonalidade import curva_por
 from core.taxonomia import faixa_preco
@@ -93,7 +94,8 @@ def render() -> None:
         return
 
     total_bruto = len(cand)
-    cand = enriquecer_velocidade(cand, fp, curva, ctx["ecom_locs"])
+    janelas = janelas_full_price(pp)
+    cand = enriquecer_velocidade(cand, fp, curva, ctx["ecom_locs"], janelas=janelas)
     if cand.empty:
         st.warning(f"Os {total_bruto} candidatos encontrados nunca venderam full price — "
                    "não servem de espelho. Afrouxe os filtros.")
@@ -137,7 +139,8 @@ def render() -> None:
 
     # ---------------------------------------------------------------- projetar
     if st.button("Projetar aposta", type="primary", disabled=not escolhidos):
-        vels = [velocidade_por_loja_desaz(fp, s, curva, ctx["ecom_locs"]) for s in escolhidos]
+        vels = [velocidade_por_loja_desaz(fp, s, curva, ctx["ecom_locs"], janela=janelas.get(s))
+                for s in escolhidos]
         vels = [v for v in vels if v]
         if not vels:
             st.error("Os espelhos escolhidos não têm histórico de venda no escopo Souq.")

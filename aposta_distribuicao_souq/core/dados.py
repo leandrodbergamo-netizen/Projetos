@@ -78,6 +78,38 @@ def carregar_lojas(caminho: Optional[str] = None, forcar: bool = False) -> pd.Da
     return _cache_parquet("lojas", build, forcar)
 
 
+def carregar_status_produto(caminho: Optional[str] = None, forcar: bool = False) -> pd.DataFrame:
+    """Log de mudanças de status do produto (quem mudou, quando, de/para).
+
+    É o que permite saber **quando cada produto entrou em liquidação** e, com
+    isso, fechar a janela em que ele esteve de fato a full price.
+    """
+    def build():
+        base = dados_dir(caminho)
+        arqs = sorted(base.glob("Base Status Produto*.xlsx"))
+        if not arqs:
+            return pd.DataFrame(columns=["Modelo", "Novo valor", "Data"])
+        df = pd.read_excel(arqs[-1], sheet_name=0)
+        df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+        return df
+
+    return _cache_parquet("status_produto", build, forcar)
+
+
+def datas_liquidacao(caminho: Optional[str] = None) -> pd.Series:
+    """Primeira data em que cada modelo (cod_sku_pai) entrou em LIQUIDAÇÃO.
+
+    Índice = cod_sku_pai. Um produto pode entrar/sair de liquidação mais de uma
+    vez; o que encerra a janela full price é a **primeira** entrada.
+    """
+    df = carregar_status_produto(caminho)
+    if df.empty or "Novo valor" not in df.columns:
+        return pd.Series(dtype="datetime64[ns]")
+    liq = df[df["Novo valor"].astype(str).str.upper().str.startswith("LIQUIDA")]
+    liq = liq.dropna(subset=["Modelo", "Data"])
+    return liq.groupby("Modelo")["Data"].min()
+
+
 def carregar_estoque(caminho: Optional[str] = None, forcar: bool = False) -> pd.DataFrame:
     def build():
         p = dados_dir(caminho) / "Base_Estoque.xlsx"

@@ -16,7 +16,7 @@ from typing import Optional
 
 import pandas as pd
 
-from core.dados import rank_colecao
+from core.dados import datas_liquidacao, rank_colecao
 from core.regra_distribuicao import reservar_cd
 from core.sazonalidade import fator_janela, semanas_equivalentes
 from core.taxonomia import (agrupar_cor, agrupar_material, faixa_preco_series,
@@ -63,6 +63,11 @@ def preparar_produtos(produtos: pd.DataFrame, apenas_roupa: bool = True) -> pd.D
     df["faixa"] = faixa_preco_series(
         df["desc_grupo_wgb"], df["desc_sub_grupo_wbg"], df["preco"]
     ).values
+    # Janela full price: da entrada em loja (dt_envio + 7, premissa de lead time)
+    # até entrar em liquidação. É o denominador correto da velocidade — inclui as
+    # semanas em que o produto estava exposto e NÃO vendeu.
+    df["dt_entrada_loja"] = pd.to_datetime(df["dt_envio"], errors="coerce") + pd.Timedelta(days=7)
+    df["dt_liquidacao"] = df["cod_sku_pai"].map(datas_liquidacao())
     return df
 
 
@@ -140,9 +145,23 @@ def candidatos_espelho(
     return cand[cols].drop_duplicates("cod_sku_pai"), usados
 
 
+def janelas_full_price(produtos_prep: pd.DataFrame) -> dict:
+    """{cod_sku_pai: (entrada em loja, entrada em liquidação)}.
+
+    Qualquer ponta pode ser NaT: sem dt_envio, a velocidade usa a 1ª venda; sem
+    liquidação (produto ainda a full price), usa a última venda.
+    """
+    cols = ["cod_sku_pai", "dt_entrada_loja", "dt_liquidacao"]
+    if not all(c in produtos_prep.columns for c in cols):
+        return {}
+    d = produtos_prep[cols].drop_duplicates("cod_sku_pai")
+    return {r.cod_sku_pai: (r.dt_entrada_loja, r.dt_liquidacao) for r in d.itertuples()}
+
+
 def enriquecer_velocidade(
     candidatos: pd.DataFrame, vendas_fp: pd.DataFrame, curva: pd.DataFrame,
     ecom_locs: Optional[set] = None, apenas_com_venda: bool = True,
+    janelas: Optional[dict] = None,
 ) -> pd.DataFrame:
     """Anexa unidades/lojas/velocidade desazonalizada a cada candidato e ordena
     por unidades (mais vendidos primeiro).
@@ -151,13 +170,16 @@ def enriquecer_velocidade(
     histórico não há velocidade para projetar, então não serve como espelho
     (são, em geral, cadastros que nunca chegaram à loja).
     """
+    janelas = janelas or {}
     linhas = []
     for sku in candidatos["cod_sku_pai"]:
-        ve = velocidade_por_loja_desaz(vendas_fp, sku, curva, ecom_locs)
+        ve = velocidade_por_loja_desaz(vendas_fp, sku, curva, ecom_locs,
+                                       janela=janelas.get(sku))
         linhas.append({
             "cod_sku_pai": sku,
             "unidades": ve.unidades if ve else 0,
             "n_lojas": ve.n_lojas if ve else 0,
+            "semanas_fp": round(ve.semanas_ativas, 1) if ve else 0.0,
             "vel_loja_desaz": round(ve.vel_por_loja_desaz, 3) if ve else 0.0,
         })
     vel = pd.DataFrame(linhas)
@@ -185,25 +207,42 @@ class VelocidadeEspelho:
 def velocidade_por_loja_desaz(
     vendas_fp: pd.DataFrame, cod_sku_pai: str, curva: pd.DataFrame,
     ecom_locs: Optional[set] = None, col_loja: str = "sk_localidade",
+    janela: Optional[tuple] = None,
 ) -> Optional[VelocidadeEspelho]:
     """Velocidade desazonalizada de um espelho, separando física (por loja) e Ecom.
 
     Física escala com a frota (por-loja × nº de lojas); Ecom é um nó fixo que não
-    escala. Ambas medidas nas "mesmas lojas" (janela em que o espelho vendeu) e
-    normalizadas para a semana média pela curva sazonal.
+    escala. Ambas normalizadas para a semana média pela curva sazonal.
+
+    `janela` = (entrada em loja, entrada em liquidação). Quando informada, ela
+    **alarga** o período considerado: as semanas em que o produto estava exposto e
+    **não** vendeu passam a entrar no denominador (sem ela, "da primeira à última
+    venda" infla a velocidade de quem vendeu e parou).
+
+    A janela nunca encurta o período nem descarta venda: se houve venda full price
+    antes da entrada presumida (o `dt_envio + 7` é premissa) ou depois da
+    liquidação (o status é do catálogo, a flag é da transação), vale a venda real.
     """
     if vendas_fp.empty or "cod_sku_pai" not in vendas_fp.columns:
         return None
     sub = vendas_fp[vendas_fp["cod_sku_pai"] == cod_sku_pai].dropna(subset=["dt_transacao"])
     if sub.empty:
         return None
+
+    dt0, dt1 = sub["dt_transacao"].min(), sub["dt_transacao"].max()
+    if janela:
+        ini, fim = janela
+        if ini is not None and pd.notna(ini):
+            dt0 = min(dt0, pd.Timestamp(ini))
+        if fim is not None and pd.notna(fim):
+            dt1 = max(dt1, pd.Timestamp(fim))
+
     ecom_locs = ecom_locs or set()
     is_ecom = sub[col_loja].isin(ecom_locs)
     fis, eco = sub[~is_ecom], sub[is_ecom]
 
     unid = int(sub["qtd_produto"].sum())
     unid_ecom = int(eco["qtd_produto"].sum())
-    dt0, dt1 = sub["dt_transacao"].min(), sub["dt_transacao"].max()
     semanas = max((dt1 - dt0).days / 7 + 1, 1.0)
     n_lojas = int(fis[col_loja].nunique())
     f = fator_janela(curva, dt0, dt1) / 100.0

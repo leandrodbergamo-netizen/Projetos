@@ -30,7 +30,7 @@ TABELAS = ("produtos", "vendas", "lojas", "faixas")
 
 # Colunas de data por tabela — o ida-e-volta pelo Postgres perde o tipo.
 _COLS_DATA = {
-    "produtos": ["dt_envio"],
+    "produtos": ["dt_envio", "dt_entrada_loja", "dt_liquidacao"],
     "vendas": ["dt_transacao"],
     "lojas": ["dt_abertura", "dt_fechamento"],
 }

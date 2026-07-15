@@ -188,6 +188,25 @@ def arredondar_maior_resto(valores: Dict[str, float], total_alvo: Optional[int] 
     return resultado
 
 
+def _um_de_cada_tamanho(aberto: Dict[str, int]) -> Dict[str, int]:
+    """Garante 1+ peça em cada tamanho, tirando dos tamanhos mais fartos.
+
+    Preserva o total da loja. Se a loja tem menos peças que tamanhos, não há como
+    completar a grade — devolve como está (o corte é feito antes, pela grade
+    mínima efetiva).
+    """
+    m = dict(aberto)
+    if not m or sum(m.values()) < len(m):
+        return m
+    for tam in [t for t, q in m.items() if q < 1]:
+        doador = max(m, key=lambda k: m[k])
+        if m[doador] <= 1:
+            break
+        m[doador] -= 1
+        m[tam] += 1
+    return m
+
+
 # --------------------------------------------------------------------------- #
 # Pipeline completo -> matriz loja x tamanho
 # --------------------------------------------------------------------------- #
@@ -213,6 +232,7 @@ def distribuir(
     cobertura_max_semanas: float = 6.0,
     grade_minima: float = 0.0,
     max_por_tamanho_loja: Optional[int] = 4,
+    garantir_grade_completa: bool = False,
 ) -> ResultadoDistribuicao:
     """Executa o pipeline completo de distribuição inicial.
 
@@ -225,6 +245,9 @@ def distribuir(
       6 semanas da sua própria velocidade de venda (exige `velocidades_semanais`).
     - `max_por_tamanho_loja` (4): nenhuma loja recebe mais que 4 peças do mesmo
       SKU-tamanho. O que passa do teto volta ao CD.
+    - `garantir_grade_completa`: só entra a loja que receber **ao menos 1 peça de
+      cada tamanho** da curva; quem não alcança sai e sua quota é redistribuída.
+      Desligado, a loja pode ficar com grade incompleta (ex.: só M e G).
 
     A sobra não distribuível (teto/grade) é reportada como `sobra_para_cd`.
     """
@@ -238,8 +261,15 @@ def distribuir(
     else:
         avisos.append("Sem velocidades por loja: teto de cobertura não aplicado (fallback).")
 
+    tamanhos_ativos = [t for t, p in (curva_tamanhos or {}).items() if p > 0]
+    # grade completa exige ao menos 1 peça de cada tamanho: a loja precisa receber,
+    # no mínimo, tantas peças quanto tamanhos — senão sai e sua quota é rateada.
+    grade_efetiva = grade_minima
+    if garantir_grade_completa and tamanhos_ativos:
+        grade_efetiva = max(grade_minima, len(tamanhos_ativos))
+
     aloc = distribuir_por_participacao(disponivel, participacoes, tetos)
-    aloc = aplicar_grade_minima(aloc, grade_minima, participacoes)
+    aloc = aplicar_grade_minima(aloc, grade_efetiva, participacoes)
 
     # arredonda a distribuição por loja (maior resto sobre o total efetivamente alocado)
     total_alocado = int(floor(sum(aloc.values()) + 1e-9))
@@ -254,6 +284,8 @@ def distribuir(
             continue
         continuo = abrir_por_tamanho(qtd, curva_tamanhos)
         aberto = arredondar_maior_resto(continuo, qtd)
+        if garantir_grade_completa:
+            aberto = _um_de_cada_tamanho(aberto)
         if max_por_tamanho_loja:
             for tam, q in list(aberto.items()):
                 if q > max_por_tamanho_loja:

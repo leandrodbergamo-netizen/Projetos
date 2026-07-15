@@ -15,6 +15,8 @@ from core.config_utils import load_config
 from core.dados import cluster_por_loja, lojas_alvo_souq, opcoes_perfil_clima
 from core.regra_distribuicao import distribuir, participacao_com_loja_nova
 
+TODOS = "TODOS"
+
 
 def _mostra_resultado(resultado, lojas_df):
     m1, m2, m3, m4 = st.columns(4)
@@ -57,10 +59,13 @@ def render() -> None:
     # ----------------------------------------------- parque-alvo (Perfil/Clima)
     disp = opcoes_perfil_clima()
     c1, c2 = st.columns(2)
-    perfis = c1.multiselect("Perfil Econômico", disp["perfis"], help="Vazio = todos os perfis.")
-    climas = c2.multiselect("Clima", disp["climas"], help="Vazio = todos os climas.")
+    perfis = c1.multiselect("Perfil Econômico", [TODOS] + disp["perfis"], default=[TODOS])
+    climas = c2.multiselect("Clima", [TODOS] + disp["climas"], default=[TODOS])
+    # "TODOS" (ou seleção vazia) = sem restrição
+    perfis = None if (TODOS in perfis or not perfis) else perfis
+    climas = None if (TODOS in climas or not climas) else climas
 
-    lojas_df = lojas_alvo_souq(perfis=perfis or None, climas=climas or None)
+    lojas_df = lojas_alvo_souq(perfis=perfis, climas=climas)
     if lojas_df.empty:
         st.warning("Nenhuma loja ativa com esse Perfil/Clima.")
         return
@@ -76,6 +81,11 @@ def render() -> None:
 
     cobertura = float(cfg.get("cobertura_maxima_semanas", 6))
     max_tam = int(cfg.get("max_por_tamanho_loja", 4))
+    n_tam = len([t for t, p in (proj["curva_tamanhos"] or {}).items() if p > 0])
+    garantir = st.checkbox(
+        "Garantir ao menos 1 peça por tamanho", value=False,
+        help=f"A curva tem {n_tam} tamanhos: a loja só entra se receber {n_tam}+ peças "
+             "(1 de cada). Quem não alcançar sai e sua quota é redistribuída.")
     st.caption(f"Tetos (Configurações): máx. **{cobertura:.0f} semanas** de cobertura por loja e "
                f"máx. **{max_tam} peças** do mesmo SKU-tamanho por loja.")
 
@@ -88,5 +98,6 @@ def render() -> None:
             velocidades_semanais=proj.get("velocidades_loja") or None,
             cobertura_max_semanas=cobertura,
             max_por_tamanho_loja=max_tam,
+            garantir_grade_completa=garantir,
         )
         _mostra_resultado(resultado, lojas_df)

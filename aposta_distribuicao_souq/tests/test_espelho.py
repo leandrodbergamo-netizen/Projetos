@@ -182,6 +182,61 @@ class TestParticipacaoLojaNova:
         assert out["9"] == pytest.approx(0.6 / 1.6)
 
 
+class TestJanelaFullPrice:
+    def test_janela_alarga_e_derruba_a_velocidade(self):
+        # vendeu 10 un em 1 semana, mas ficou exposto 10 semanas ate liquidar:
+        # a velocidade real e diluida pelas semanas em que nao vendeu.
+        reg = [("2024-01-03", 1, 10, "X")]
+        sem = velocidade_por_loja_desaz(_vendas(reg), "X", CURVA_NEUTRA)
+        com = velocidade_por_loja_desaz(_vendas(reg), "X", CURVA_NEUTRA,
+                                        janela=(pd.Timestamp("2024-01-01"), pd.Timestamp("2024-03-11")))
+        assert com.semanas_ativas > sem.semanas_ativas
+        assert com.vel_por_loja_desaz < sem.vel_por_loja_desaz
+        assert com.unidades == sem.unidades          # nunca perde venda
+
+    def test_janela_nunca_encurta_nem_descarta_venda(self):
+        # venda full price DEPOIS da liquidacao (status do catalogo x flag da
+        # transacao) e ANTES da entrada presumida (dt_envio+7 e premissa):
+        # vale a venda real, a janela nao pode cortar.
+        reg = [("2024-01-03", 1, 5, "X"), ("2024-06-05", 1, 5, "X")]
+        com = velocidade_por_loja_desaz(_vendas(reg), "X", CURVA_NEUTRA,
+                                        janela=(pd.Timestamp("2024-02-01"), pd.Timestamp("2024-03-01")))
+        assert com.unidades == 10
+        assert com.semanas_ativas >= 22               # cobre ate a ultima venda
+
+    def test_sem_janela_conhecida_usa_primeira_e_ultima_venda(self):
+        reg = [("2024-01-03", 1, 10, "X")]
+        a = velocidade_por_loja_desaz(_vendas(reg), "X", CURVA_NEUTRA, janela=(None, None))
+        b = velocidade_por_loja_desaz(_vendas(reg), "X", CURVA_NEUTRA)
+        assert a.semanas_ativas == b.semanas_ativas
+
+
+class TestGradeCompleta:
+    def _distribui(self, garantir, aposta=30):
+        from core.regra_distribuicao import distribuir
+        return distribuir(aposta_total=aposta, participacoes={"L1": 0.9, "L2": 0.1},
+                          curva_tamanhos={"PP": 1, "P": 2, "M": 2, "G": 1, "GG": 1},
+                          reserva_cd_pct=0.0, max_por_tamanho_loja=None,
+                          garantir_grade_completa=garantir)
+
+    def test_garantida_todo_tamanho_tem_ao_menos_1(self):
+        r = self._distribui(True)
+        for loja, tams in r.matriz.items():
+            if sum(tams.values()) > 0:
+                assert all(q >= 1 for q in tams.values()), f"{loja} ficou com tamanho zerado"
+
+    def test_loja_pequena_demais_sai_e_a_quota_e_redistribuida(self):
+        # L2 (10%) de 30 pecas = 3 -> nao da 1 de cada um dos 5 tamanhos, entao sai
+        r = self._distribui(True)
+        assert sum(r.matriz["L2"].values()) == 0
+        assert sum(r.matriz["L1"].values()) == 30      # herdou a quota da L2
+
+    def test_desligada_permite_grade_incompleta(self):
+        r = self._distribui(False)
+        assert sum(r.matriz["L2"].values()) > 0        # loja pequena permanece
+        assert any(q == 0 for q in r.matriz["L2"].values())   # com tamanho faltando
+
+
 class TestTetosDaDistribuicao:
     def test_teto_de_pecas_por_sku_tamanho(self):
         from core.regra_distribuicao import distribuir
