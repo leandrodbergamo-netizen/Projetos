@@ -1,18 +1,22 @@
 """Distribuição — matriz loja × tamanho.
 
-Dois modos:
-- "Da projeção": usa a aposta/participações/curva calculadas na aba Nova Aposta
-  (participação já com lojas novas extrapoladas por Cluster; Ecom fora da matriz).
-- "Manual": entrada avulsa de participações e curva, para simulações rápidas.
+Usa a aposta/participações/velocidades calculadas na aba Nova Aposta. O parque-alvo
+pode ser restringido por Perfil Econômico e Clima; lojas novas (sem histórico do
+espelho) herdam a participação média das lojas com mesmo Perfil+Clima. Ecom entra
+na aposta, mas não é destino físico.
+
+Tetos da distribuição inicial (Configurações): cobertura máxima em semanas por
+loja e máximo de peças do mesmo SKU-tamanho por loja.
 """
 import pandas as pd
 import streamlit as st
 
 from core.config_utils import load_config
-from core.regra_distribuicao import distribuir
+from core.dados import cluster_por_loja, lojas_alvo_souq, opcoes_perfil_clima
+from core.regra_distribuicao import distribuir, participacao_com_loja_nova
 
 
-def _mostra_resultado(resultado):
+def _mostra_resultado(resultado, lojas_df):
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Reserva CD", f"{resultado.reserva_cd:.0f}")
     m2.metric("Disponível lojas", f"{resultado.disponivel_lojas:.0f}")
@@ -20,72 +24,69 @@ def _mostra_resultado(resultado):
     m4.metric("Sobra p/ CD", f"{resultado.sobra_para_cd}")
     for aviso in resultado.avisos:
         st.info(aviso)
+
     st.subheader("Matriz loja × tamanho")
     matriz = pd.DataFrame(resultado.matriz).T.fillna(0).astype(int)
-    if not matriz.empty:
-        matriz["TOTAL"] = matriz.sum(axis=1)
-        matriz = matriz.sort_values("TOTAL", ascending=False)
+    if matriz.empty:
+        st.dataframe(matriz, width="stretch")
+        return
+    matriz["TOTAL"] = matriz.sum(axis=1)
+    matriz = matriz[matriz["TOTAL"] > 0].sort_values("TOTAL", ascending=False)
+    # troca o código da loja pelo nome, com Perfil/Clima ao lado
+    nomes = {str(float(r["sk_localidade"])): f'{r["desc_nome"]} ({r["Perfil"]}/{r["Temperatura"]})'
+             for _, r in lojas_df.iterrows()}
+    matriz.index = [nomes.get(i, i) for i in matriz.index]
     st.dataframe(matriz, width="stretch")
     st.session_state["ultima_distribuicao"] = matriz
 
 
-def _da_projecao():
+def render() -> None:
+    st.title("Distribuição")
+    st.caption("Reserva CD · participação por loja (loja nova herda de Perfil+Clima) · "
+               "teto de cobertura · teto por SKU-tamanho. Ecom entra na aposta, não na matriz física.")
+
     proj = st.session_state.get("projecao")
     if not proj:
         st.info("Nenhuma projeção ainda. Vá à aba **Nova Aposta**, escolha os espelhos e clique em "
                 "**Projetar aposta**.")
         return
+
+    cfg = load_config()
     st.write(f"Projeção atual: **{proj['resumo']}**")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Aposta total", f"{proj['aposta_total']:.0f}")
-    c2.metric("Lojas-alvo", f"{len(proj['participacoes'])}")
-    c3.metric("Espelhos", f"{len(proj['espelhos'])}")
-    grade = st.number_input("Grade mínima (un/loja)", 0, 50, int(proj.get("grade_minima", 3)))
-    if st.button("Distribuir projeção", type="primary"):
+
+    # ----------------------------------------------- parque-alvo (Perfil/Clima)
+    disp = opcoes_perfil_clima()
+    c1, c2 = st.columns(2)
+    perfis = c1.multiselect("Perfil Econômico", disp["perfis"], help="Vazio = todos os perfis.")
+    climas = c2.multiselect("Clima", disp["climas"], help="Vazio = todos os climas.")
+
+    lojas_df = lojas_alvo_souq(perfis=perfis or None, climas=climas or None)
+    if lojas_df.empty:
+        st.warning("Nenhuma loja ativa com esse Perfil/Clima.")
+        return
+
+    lojas_alvo = [str(float(x)) for x in lojas_df["sk_localidade"]]
+    part = participacao_com_loja_nova(proj["participacoes_hist"], lojas_alvo, cluster_por_loja())
+    novas = [l for l in lojas_alvo if l not in proj["participacoes_hist"]]
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Aposta total", f"{proj['aposta_total']:.0f}")
+    m2.metric("Lojas-alvo", f"{len(lojas_alvo)}")
+    m3.metric("Novas (extrapoladas)", f"{len(novas)}")
+
+    cobertura = float(cfg.get("cobertura_maxima_semanas", 6))
+    max_tam = int(cfg.get("max_por_tamanho_loja", 4))
+    st.caption(f"Tetos (Configurações): máx. **{cobertura:.0f} semanas** de cobertura por loja e "
+               f"máx. **{max_tam} peças** do mesmo SKU-tamanho por loja.")
+
+    if st.button("Distribuir", type="primary"):
         resultado = distribuir(
             aposta_total=proj["aposta_total"],
-            participacoes=proj["participacoes"],
+            participacoes=part,
             curva_tamanhos=proj["curva_tamanhos"],
             reserva_cd_pct=proj.get("reserva_cd_pct", 0.20),
-            grade_minima=grade,
+            velocidades_semanais=proj.get("velocidades_loja") or None,
+            cobertura_max_semanas=cobertura,
+            max_por_tamanho_loja=max_tam,
         )
-        _mostra_resultado(resultado)
-
-
-def _manual():
-    cfg = load_config()
-    col1, col2 = st.columns(2)
-    with col1:
-        aposta_total = st.number_input("Aposta total (unidades)", min_value=0.0, value=1000.0, step=10.0)
-        reserva_cd_pct = st.slider("Reserva CD (%)", 0.0, 0.5, float(cfg.get("reserva_cd_pct", 0.20)), 0.01)
-    with col2:
-        grade_minima = st.number_input("Grade mínima (unidades/loja)", min_value=0.0, value=0.0, step=1.0)
-
-    st.caption("Participação histórica (não precisa somar 1).")
-    lojas_default = pd.DataFrame({"loja": ["Loja 1", "Loja 2", "Loja 3"],
-                                  "participacao": [0.5, 0.3, 0.2]})
-    lojas_df = st.data_editor(lojas_default, num_rows="dynamic", key="lojas_editor", width="stretch")
-    curva_default = pd.DataFrame({"tamanho": ["P", "M", "G", "GG"], "peso": [1.0, 2.0, 2.0, 1.0]})
-    curva_df = st.data_editor(curva_default, num_rows="dynamic", key="curva_editor", width="stretch")
-
-    if st.button("Distribuir", type="primary", key="dist_manual"):
-        participacoes = {str(r["loja"]): float(r["participacao"]) for _, r in lojas_df.iterrows()
-                         if str(r.get("loja", "")).strip() and float(r.get("participacao", 0) or 0) > 0}
-        curva = {str(r["tamanho"]): float(r["peso"]) for _, r in curva_df.iterrows()
-                 if str(r.get("tamanho", "")).strip()}
-        if not participacoes:
-            st.error("Informe ao menos uma loja com participação > 0.")
-            return
-        _mostra_resultado(distribuir(aposta_total, participacoes, curva,
-                                     reserva_cd_pct=reserva_cd_pct, grade_minima=grade_minima))
-
-
-def render() -> None:
-    st.title("Distribuição")
-    st.caption("Reserva CD · participação por loja (com loja nova por Cluster) · grade mínima · "
-               "abertura por tamanho. Ecom entra na aposta, mas não na matriz física.")
-    tab_proj, tab_manual = st.tabs(["Da projeção", "Manual"])
-    with tab_proj:
-        _da_projecao()
-    with tab_manual:
-        _manual()
+        _mostra_resultado(resultado, lojas_df)

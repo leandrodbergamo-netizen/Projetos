@@ -19,7 +19,8 @@ import pandas as pd
 from core.dados import rank_colecao
 from core.regra_distribuicao import reservar_cd
 from core.sazonalidade import fator_janela, semanas_equivalentes
-from core.taxonomia import agrupar_cor, agrupar_material, faixa_preco_series
+from core.taxonomia import (agrupar_cor, agrupar_material, faixa_preco_series,
+                            normalizar_subgrupo)
 
 # Colunas exibidas na tabela de candidatos. Manga/comprimento/fit entram como
 # informação de CONSULTA (ajudam o comprador a escolher), não como filtro: o eta²
@@ -46,6 +47,10 @@ def preparar_produtos(produtos: pd.DataFrame, apenas_roupa: bool = True) -> pd.D
     # vendas. Linhas "header" (4 seg, sem tamanho) são descartadas.
     seg = df["cod_sku_pai"].astype(str).str.count(r"\.") + 1
     df = df[seg >= 5]
+    # CANCELADO nunca foi produzido (98% sem venda, sem foto): não pode ser espelho.
+    if "desc_status_produto" in df.columns:
+        df = df[df["desc_status_produto"].astype(str).str.upper() != "CANCELADO"]
+    df["desc_sub_grupo_wbg"] = df["desc_sub_grupo_wbg"].map(normalizar_subgrupo)
     df["grupo_material"] = [
         agrupar_material(g, m) for g, m in zip(df.get("desc_grupo_wgb"), df.get("desc_material"))
     ]
@@ -89,7 +94,7 @@ def candidatos_espelho(
     grupo: str,
     faixa: Optional[str] = None,
     tecido: Optional[str] = None,
-    cor_grupo: Optional[str] = None,
+    cor_grupo=None,
     desde_colecao: float = 2022.0,
     relaxar: bool = True,
     min_candidatos: int = 5,
@@ -100,6 +105,7 @@ def candidatos_espelho(
     Hard: subgrupo + grupo + faixa + tecido + coleção >= desde. Coleção fora do
     escopo (PERENE/ALTO VERÃO/CANCELADO) tem rank NaN e cai fora sozinha.
     Soft: apenas cor, afrouxada se sobrarem menos de `min_candidatos`.
+    `cor_grupo` aceita uma cor ou uma lista (vazio/None = todas as cores).
     Manga/comprimento/fit NÃO filtram — vão na tabela como consulta.
     Data NÃO é critério (só posiciona a janela sazonal).
     """
@@ -112,13 +118,16 @@ def candidatos_espelho(
         hard &= df["grupo_material"] == tecido
     base = df[hard]
 
-    soft_vals = {"cor_grupo": cor_grupo}
-    ativos = [c for c in (soft_ordem or SOFT_PADRAO) if soft_vals.get(c) is not None and c in base.columns]
+    if isinstance(cor_grupo, str):
+        cor_grupo = [cor_grupo]
+    cores = list(cor_grupo) if cor_grupo else None
+    soft_vals = {"cor_grupo": cores}
+    ativos = [c for c in (soft_ordem or SOFT_PADRAO) if soft_vals.get(c) and c in base.columns]
 
     def aplica(cols):
         m = pd.Series(True, index=base.index)
         for c in cols:
-            m &= base[c] == soft_vals[c]
+            m &= base[c].isin(soft_vals[c])
         return base[m]
 
     usados = list(ativos)
@@ -133,10 +142,15 @@ def candidatos_espelho(
 
 def enriquecer_velocidade(
     candidatos: pd.DataFrame, vendas_fp: pd.DataFrame, curva: pd.DataFrame,
-    ecom_locs: Optional[set] = None,
+    ecom_locs: Optional[set] = None, apenas_com_venda: bool = True,
 ) -> pd.DataFrame:
     """Anexa unidades/lojas/velocidade desazonalizada a cada candidato e ordena
-    por unidades (mais vendidos primeiro). Candidato sem venda vai com 0."""
+    por unidades (mais vendidos primeiro).
+
+    `apenas_com_venda` descarta quem nunca vendeu full price no escopo: sem
+    histórico não há velocidade para projetar, então não serve como espelho
+    (são, em geral, cadastros que nunca chegaram à loja).
+    """
     linhas = []
     for sku in candidatos["cod_sku_pai"]:
         ve = velocidade_por_loja_desaz(vendas_fp, sku, curva, ecom_locs)
@@ -148,6 +162,8 @@ def enriquecer_velocidade(
         })
     vel = pd.DataFrame(linhas)
     out = candidatos.merge(vel, on="cod_sku_pai", how="left")
+    if apenas_com_venda:
+        out = out[out["unidades"] > 0]
     return out.sort_values("unidades", ascending=False, ignore_index=True)
 
 
@@ -204,6 +220,31 @@ def velocidade_por_loja_desaz(
     )
 
 
+def velocidade_de_cada_loja(
+    vendas_fp: pd.DataFrame, cod_sku_pais: list, curva: pd.DataFrame,
+    ecom_locs: Optional[set] = None, col_loja: str = "sk_localidade",
+) -> dict:
+    """Velocidade semanal desazonalizada **de cada loja** para os espelhos dados.
+
+    Alimenta o teto de cobertura da distribuição: cada loja não pode receber
+    mais que N semanas da sua própria velocidade. Lojas sem histórico dos
+    espelhos ficam de fora do dict (o chamador decide o fallback).
+    """
+    sub = vendas_fp[vendas_fp["cod_sku_pai"].isin(cod_sku_pais)].dropna(subset=["dt_transacao"])
+    if ecom_locs:
+        sub = sub[~sub[col_loja].isin(ecom_locs)]
+    if sub.empty:
+        return {}
+    fator = fator_janela(curva, sub["dt_transacao"].min(), sub["dt_transacao"].max()) / 100.0
+    saida = {}
+    for loja, g in sub.groupby(col_loja):
+        dt0, dt1 = g["dt_transacao"].min(), g["dt_transacao"].max()
+        semanas = max((dt1 - dt0).days / 7 + 1, 1.0)
+        vel = g["qtd_produto"].sum() / semanas
+        saida[str(float(loja))] = vel / fator if fator > 0 else vel
+    return saida
+
+
 # --------------------------------------------------------------------------- #
 # Projeção da aposta
 # --------------------------------------------------------------------------- #
@@ -218,7 +259,6 @@ class ApostaProjetada:
     aposta_sugerida: float
     reserva_cd: float
     disponivel_lojas: float
-    moq: Optional[int] = None
     espelhos: list = field(default_factory=list)
     avisos: list[str] = field(default_factory=list)
 
@@ -233,7 +273,6 @@ def projetar_aposta(
     aproveitamento: float = 0.70,
     reserva_cd_pct: float = 0.20,
     pesos: Optional[dict] = None,
-    moq: Optional[int] = None,
 ) -> ApostaProjetada:
     """Dimensiona a aposta a partir dos espelhos selecionados.
 
@@ -256,8 +295,6 @@ def projetar_aposta(
     aposta = venda / aproveitamento if aproveitamento > 0 else venda
     reserva, disp = reservar_cd(aposta, reserva_cd_pct)
 
-    if moq is not None and aposta < moq:
-        avisos.append(f"Aposta sugerida ({aposta:.0f}) abaixo do MOQ ({moq}). Avaliar pedido mínimo.")
     if venda_ecom > 0:
         avisos.append(f"Inclui demanda de Ecom (~{venda_ecom:.0f} un) na aposta; Ecom não recebe na matriz física.")
 
@@ -265,5 +302,5 @@ def projetar_aposta(
         vel_por_loja_desaz=vel_fis, vel_ecom_desaz=vel_eco, n_lojas_alvo=n_lojas_alvo,
         semanas_equivalentes=eqw, venda_projetada=venda, venda_ecom=venda_ecom,
         aposta_sugerida=aposta, reserva_cd=reserva, disponivel_lojas=disp,
-        moq=moq, espelhos=vs, avisos=avisos,
+        espelhos=vs, avisos=avisos,
     )

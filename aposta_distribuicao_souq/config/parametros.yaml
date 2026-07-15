@@ -1,11 +1,16 @@
+# Premissas gerais do app (editáveis na aba Configurações).
 aproveitamento: 0.70
 reserva_cd_pct: 0.20
-cobertura_maxima_semanas: 4
-horizonte_semanas: 12
+
+# Fim do período saudável da coleção — define o horizonte da projeção.
+# VERÃO YYYY-YYYY+1 encerra em 02/01 do ano seguinte; INVERNO YYYY, em 14/06.
+fim_periodo_verao: 02/01
+fim_periodo_inverno: 14/06
+
+# Tetos da distribuição inicial.
+cobertura_maxima_semanas: 6   # nunca mais que 6 semanas da velocidade da loja
+max_por_tamanho_loja: 4       # nunca mais que 4 peças do mesmo SKU-tamanho por loja
+
+# Escopo e sazonalidade.
 min_amostra_curva: 800
 desde_colecao: 2022.0
-limiar_liquidacao_desc: 0.25
-dias_liquidacao_consecutivos: 3
-min_transacoes_dia: 3
-min_unidades_curva: 100
-min_produtos_espelho: 5

@@ -137,11 +137,11 @@ class TestProjetarAposta:
         assert ap.venda_projetada == pytest.approx(10 * 20 * 10 + 50)
         assert ap.aposta_sugerida == pytest.approx(2050.0)
 
-    def test_aviso_de_moq(self):
-        reg = [("2024-01-03", 1, 1, "X")]
-        ve = velocidade_por_loja_desaz(_vendas(reg), "X", CURVA_NEUTRA)
-        ap = projetar_aposta([ve], CURVA_NEUTRA, "2024-01-01", 1, horizonte_semanas=1, moq=100)
-        assert any("MOQ" in a for a in ap.avisos)
+    def test_avisa_que_ecom_entra_na_aposta(self):
+        reg = [("2024-01-03", 1, 10, "X"), ("2024-01-03", 456, 5, "X")]
+        ve = velocidade_por_loja_desaz(_vendas(reg), "X", CURVA_NEUTRA, ecom_locs={456})
+        ap = projetar_aposta([ve], CURVA_NEUTRA, "2024-01-01", 5, horizonte_semanas=1)
+        assert any("Ecom" in a for a in ap.avisos)
 
 
 class TestParticipacaoLojaNova:
@@ -162,3 +162,69 @@ class TestParticipacaoLojaNova:
     def test_sem_historico_distribui_uniforme(self):
         out = participacao_com_loja_nova({}, ["1", "2"], {})
         assert out == {"1": 0.5, "2": 0.5}
+
+    def test_perfil_e_clima_par_exato(self):
+        part_hist = {"1": 0.5, "2": 0.3, "3": 0.2}
+        chaves = {"1": ("A", "Quente"), "2": ("A", "Quente"),
+                  "3": ("AB", "Frio"), "9": ("A", "Quente")}
+        out = participacao_com_loja_nova(part_hist, ["1", "2", "3", "9"], chaves)
+        # loja 9 herda a média de (A, Quente) = (0.5+0.3)/2 = 0.4, antes de renormalizar
+        assert out["9"] == pytest.approx(0.4 / 1.4)
+
+    def test_combinacao_inexistente_afrouxa_para_o_perfil(self):
+        # no parque real não existe loja Perfil AB com clima Frio: sem o
+        # afrouxamento a loja nova cairia na média geral, que é pior.
+        part_hist = {"1": 0.2, "2": 0.2, "3": 0.6}
+        chaves = {"1": ("A", "Frio"), "2": ("A", "Quente"),
+                  "3": ("AB", "Quente"), "9": ("AB", "Frio")}
+        out = participacao_com_loja_nova(part_hist, ["1", "2", "3", "9"], chaves)
+        # (AB, Frio) não existe -> usa a média de AB = 0.6
+        assert out["9"] == pytest.approx(0.6 / 1.6)
+
+
+class TestTetosDaDistribuicao:
+    def test_teto_de_pecas_por_sku_tamanho(self):
+        from core.regra_distribuicao import distribuir
+        r = distribuir(aposta_total=100, participacoes={"L1": 0.5, "L2": 0.5},
+                       curva_tamanhos={"M": 1.0}, reserva_cd_pct=0.0,
+                       max_por_tamanho_loja=4)
+        assert r.matriz["L1"]["M"] == 4 and r.matriz["L2"]["M"] == 4
+        assert r.sobra_para_cd == 92          # o excedente volta ao CD
+        assert any("teto de 4" in a for a in r.avisos)
+
+    def test_teto_de_cobertura_usa_a_velocidade_da_loja(self):
+        from core.regra_distribuicao import distribuir
+        r = distribuir(aposta_total=200, participacoes={"L1": 0.5, "L2": 0.5},
+                       curva_tamanhos={"P": 1, "M": 1, "G": 1}, reserva_cd_pct=0.0,
+                       velocidades_semanais={"L1": 2.0, "L2": 10.0},
+                       cobertura_max_semanas=6, max_por_tamanho_loja=None)
+        assert sum(r.matriz["L1"].values()) == 12    # 2/sem * 6 semanas
+        assert sum(r.matriz["L2"].values()) == 60    # 10/sem * 6 semanas
+
+    def test_sem_teto_por_tamanho_quando_desligado(self):
+        from core.regra_distribuicao import distribuir
+        r = distribuir(aposta_total=100, participacoes={"L1": 1.0},
+                       curva_tamanhos={"M": 1.0}, reserva_cd_pct=0.0,
+                       max_por_tamanho_loja=None)
+        assert r.matriz["L1"]["M"] == 100
+
+
+class TestColecaoEHorizonte:
+    def test_fim_de_periodo_por_estacao(self):
+        from core.dados import fim_periodo_saudavel
+        from datetime import date
+        assert fim_periodo_saudavel("INVERNO 2027") == date(2027, 6, 14)
+        assert fim_periodo_saudavel("VERÃO 2026-2027") == date(2027, 1, 2)
+
+    def test_horizonte_da_entrada_ate_o_fim(self):
+        from core.dados import semanas_ate
+        assert semanas_ate("2027-01-20", "2027-06-14") == 21
+        assert semanas_ate("2027-06-01", "2027-06-14") == 2
+
+    def test_horizonte_tem_piso_de_1_semana(self):
+        from core.dados import semanas_ate
+        assert semanas_ate("2027-06-20", "2027-06-14") == 1   # entrada após o fim
+
+    def test_colecoes_projetaveis_em_ordem_cronologica(self):
+        from core.dados import colecoes_projetaveis
+        assert colecoes_projetaveis(2026)[:3] == ["INVERNO 2026", "VERÃO 2026-2027", "INVERNO 2027"]

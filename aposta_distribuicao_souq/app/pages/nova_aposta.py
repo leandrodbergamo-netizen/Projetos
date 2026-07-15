@@ -1,25 +1,29 @@
 """Nova Aposta — simulador de reunião.
 
-Fluxo: inputs do produto novo -> tabela de candidatos a espelho (com foto) ->
-seleção -> projeção da aposta (velocidade desazonalizada + sazonalidade + Ecom)
--> envia participações/curva para a aba Distribuição.
+Fluxo: características do produto novo -> tabela de candidatos a espelho (com
+foto) -> seleção -> projeção da aposta (velocidade desazonalizada + sazonalidade
++ Ecom) -> envia participações/curva/velocidades para a aba Distribuição.
+
+Os parâmetros gerais (aproveitamento, fim de período, tetos) ficam em
+**Configurações**; aqui só entra a premissa de reserva CD, que é da aposta.
 """
 from datetime import date
 
 import pandas as pd
 import streamlit as st
 
-from app.dados_app import contexto_lojas, opcoes, produtos_prep, vendas_fp
+from app.dados_app import (contexto_lojas, opcoes, opcoes_por_relevancia,
+                           produtos_prep, vendas_fp)
 from core.config_utils import load_config
-from core.dados import curva_tamanhos, participacao_lojas
+from core.dados import (colecoes_projetaveis, curva_tamanhos, fim_periodo_saudavel,
+                        participacao_lojas, semanas_ate)
 from core.espelho import (candidatos_espelho, enriquecer_velocidade, projetar_aposta,
-                          velocidade_por_loja_desaz)
+                          velocidade_de_cada_loja, velocidade_por_loja_desaz)
 from core.regra_distribuicao import participacao_com_loja_nova
 from core.sazonalidade import curva_por
 from core.taxonomia import faixa_preco
 
 GRUPOS = ["TECIDO PLANO", "MALHA", "TRICOT", "JEANS"]
-QUALQUER = "(qualquer)"
 
 
 def _foto(url):
@@ -34,7 +38,6 @@ def render() -> None:
     cfg = load_config()
     pp = produtos_prep()
     fp = vendas_fp()
-    ctx = contexto_lojas()
 
     # ------------------------------------------------------------------ inputs
     c1, c2, c3 = st.columns(3)
@@ -42,42 +45,66 @@ def render() -> None:
         subgrupo = st.selectbox("Subgrupo", opcoes("desc_sub_grupo_wbg"))
         grupo = st.selectbox("Grupo (construção)", GRUPOS)
     with c2:
-        tecido = st.selectbox("Tecido (matéria-prima)", opcoes("grupo_material"))
-        cor = st.selectbox("Cor", opcoes("cor_grupo"))
+        tecido = st.selectbox("Tecido (matéria-prima)", opcoes_por_relevancia("grupo_material"))
+        cores = st.multiselect("Cor", opcoes("cor_grupo"),
+                               help="Vazio = todas as cores. Selecione uma ou mais para restringir.")
     with c3:
         preco = st.number_input("Preço sugerido (R$)", min_value=0.0, value=498.0, step=10.0)
         dt_entrada = st.date_input("Data de entrada em loja", value=date.today(),
+                                   format="DD/MM/YYYY",
                                    help="Premissa dt_envio + 7 dias; posiciona a janela sazonal.")
 
-    with st.expander("Parâmetros"):
-        p1, p2, p3, p4 = st.columns(4)
-        horizonte = p1.number_input("Horizonte (semanas)", 4, 52, int(cfg.get("horizonte_semanas", 12)))
-        aprov = p2.number_input("Aproveitamento", 0.3, 1.0, float(cfg.get("aproveitamento", 0.70)), 0.01)
-        reserva_pct = p3.number_input("Reserva CD (%)", 0.0, 0.5, float(cfg.get("reserva_cd_pct", 0.20)), 0.01)
-        grade_min = p4.number_input("Grade mínima (un/loja)", 0, 50, 3)
+    c4, c5 = st.columns(2)
+    with c4:
+        opcoes_col = colecoes_projetaveis(date.today().year)
+        # default = primeira coleção ainda em aberto; as já encerradas continuam
+        # na lista (dá para reprojetar o passado), mas não são o padrão.
+        padrao = next((i for i, c in enumerate(opcoes_col)
+                       if fim_periodo_saudavel(c, cfg.get("fim_periodo_verao", "02/01"),
+                                               cfg.get("fim_periodo_inverno", "14/06")) >= dt_entrada), 0)
+        colecao = st.selectbox("Coleção que está sendo apostada", opcoes_col, index=padrao,
+                               help="Define o fim do período saudável e, com ele, o horizonte da projeção.")
+    with c5:
+        reserva_pct = st.number_input("Reserva CD (%)", 0.0, 0.5,
+                                      float(cfg.get("reserva_cd_pct", 0.20)), 0.01,
+                                      help="Única premissa da aposta; o resto está em Configurações.")
 
+    # horizonte = da entrada até o fim saudável da coleção
+    fim = fim_periodo_saudavel(colecao, cfg.get("fim_periodo_verao", "02/01"),
+                               cfg.get("fim_periodo_inverno", "14/06"))
+    horizonte = semanas_ate(dt_entrada, fim)
     faixa_info = faixa_preco(grupo, subgrupo, preco)
     fx = faixa_info["faixa"]
-    st.info(f"Faixa de preço: **{fx or '—'}**  ·  MOQ: **{faixa_info.get('moq') or '—'}**  "
-            f"·  lojas-alvo (Souq físicas ativas): **{ctx['n_lojas_alvo']}**")
+    ctx = contexto_lojas()
+
+    st.info(f"Faixa de preço **{fx or '—'}**  ·  fim do período saudável **{fim:%d/%m/%Y}**  ·  "
+            f"horizonte **{horizonte} semanas**  ·  lojas-alvo **{ctx['n_lojas_alvo']}**")
+    if pd.Timestamp(dt_entrada) > pd.Timestamp(fim):
+        st.warning("A data de entrada é depois do fim do período desta coleção. Confira a coleção escolhida.")
 
     # -------------------------------------------------------------- candidatos
     cand, soft = candidatos_espelho(
         pp, subgrupo=subgrupo, grupo=grupo, faixa=fx, tecido=tecido,
-        cor_grupo=cor if cor != QUALQUER else None,
-        desde_colecao=float(cfg.get("desde_colecao", 2022.0)),
+        cor_grupo=cores or None, desde_colecao=float(cfg.get("desde_colecao", 2022.0)),
     )
     curva, nivel = curva_por(fp, subgrupo=subgrupo, material=tecido)
-
     if cand.empty:
-        st.warning("Nenhum candidato a espelho com esses filtros. Afrouxe cor/tecido ou ajuste a faixa.")
+        st.warning("Nenhum candidato a espelho com esses filtros. Afrouxe a cor/tecido ou ajuste o preço.")
         return
 
+    total_bruto = len(cand)
     cand = enriquecer_velocidade(cand, fp, curva, ctx["ecom_locs"])
+    if cand.empty:
+        st.warning(f"Os {total_bruto} candidatos encontrados nunca venderam full price — "
+                   "não servem de espelho. Afrouxe os filtros.")
+        return
+
     st.subheader(f"Candidatos a espelho ({len(cand)}) — curva sazonal: {nivel}")
+    ocultos = total_bruto - len(cand)
     st.caption(
-        f"Filtro de cor {'mantido' if soft else 'afrouxado (poucos candidatos)'}. "
-        "Manga/comprimento/fit são apenas consulta — não filtram. Marque os espelhos a usar."
+        f"{'Filtro de cor mantido' if soft else 'Sem filtro de cor'}"
+        + (f" · {ocultos} sem histórico de venda ocultado(s)" if ocultos else "")
+        + " · manga/comprimento/fit são apenas consulta. Marque os espelhos a usar."
     )
 
     sel_todos = st.checkbox("Selecionar todos", value=False)
@@ -96,7 +123,6 @@ def render() -> None:
         "n_lojas": cand["n_lojas"],
         "vel/loja": cand["vel_loja_desaz"],
     })
-
     editado = st.data_editor(
         tabela, hide_index=True, width="stretch", key="editor_espelhos",
         column_config={
@@ -117,8 +143,9 @@ def render() -> None:
             st.error("Os espelhos escolhidos não têm histórico de venda no escopo Souq.")
             return
         ap = projetar_aposta(vels, curva, pd.Timestamp(dt_entrada), ctx["n_lojas_alvo"],
-                             horizonte_semanas=int(horizonte), aproveitamento=aprov,
-                             reserva_cd_pct=reserva_pct, moq=faixa_info.get("moq"))
+                             horizonte_semanas=horizonte,
+                             aproveitamento=float(cfg.get("aproveitamento", 0.70)),
+                             reserva_cd_pct=reserva_pct)
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Venda projetada", f"{ap.venda_projetada:.0f}")
@@ -128,21 +155,18 @@ def render() -> None:
         for aviso in ap.avisos:
             st.warning(aviso)
 
-        # participações (com loja nova) + curva de tamanhos p/ a aba Distribuição
+        # insumos da distribuição: participação (com loja nova) + curva de tamanhos
+        # + velocidade de cada loja (alimenta o teto de cobertura)
         skus = [v.cod_sku_pai for v in vels]
         fp_esp_fisico = fp[fp["cod_sku_pai"].isin(skus) & ~fp["sk_localidade"].isin(ctx["ecom_locs"])]
-        part = participacao_com_loja_nova(
-            participacao_lojas(fp_esp_fisico), ctx["lojas_alvo"], ctx["cluster_por_loja"])
-        curva_tam = curva_tamanhos(fp[fp["cod_sku_pai"].isin(skus)],
-                                   produtos_prep(), col_tamanho="desc_tamanho")
-
         st.session_state["projecao"] = {
-            "resumo": f"{subgrupo}/{grupo}/{tecido}/{cor} · R${preco:.0f} · faixa {fx}",
+            "resumo": f"{subgrupo}/{grupo}/{tecido} · R${preco:.0f} · faixa {fx} · {colecao}",
             "aposta_total": ap.aposta_sugerida,
             "reserva_cd_pct": reserva_pct,
-            "grade_minima": grade_min,
-            "participacoes": part,
-            "curva_tamanhos": curva_tam,
+            "participacoes_hist": participacao_lojas(fp_esp_fisico),
+            "curva_tamanhos": curva_tamanhos(fp[fp["cod_sku_pai"].isin(skus)], pp,
+                                             col_tamanho="desc_tamanho"),
+            "velocidades_loja": velocidade_de_cada_loja(fp, skus, curva, ctx["ecom_locs"]),
             "espelhos": skus,
         }
         st.success("Projeção pronta. Abra a aba **Distribuição** para ver a matriz loja × tamanho.")

@@ -46,6 +46,15 @@ def _cfg_cor() -> dict:
         return yaml.safe_load(fh)
 
 
+@lru_cache(maxsize=1)
+def _cfg_subgrupo() -> dict:
+    caminho = CONFIG_DIR / "subgrupos.yaml"
+    if not caminho.exists():
+        return {"sinonimos": {}}
+    with caminho.open("r", encoding="utf-8") as fh:
+        return yaml.safe_load(fh) or {"sinonimos": {}}
+
+
 def _primeira_ocorrencia(texto: str, mapa: dict) -> Optional[str]:
     """Retorna o bucket da 1a chave (por posição) encontrada em `texto`."""
     achou, pos_min = None, None
@@ -54,6 +63,23 @@ def _primeira_ocorrencia(texto: str, mapa: dict) -> Optional[str]:
         if i >= 0 and (pos_min is None or i < pos_min):
             pos_min, achou = i, bucket
     return achou
+
+
+# --------------------------------------------------------------------------- #
+# Subgrupo
+# --------------------------------------------------------------------------- #
+def normalizar_subgrupo(desc_sub_grupo_wbg):
+    """Limpa espaços extras e resolve sinônimos do subgrupo.
+
+    O cadastro tem 'JAQUETA ' e 'JAQUETA' (e 'BODY '/'BODY') como valores
+    distintos, o que duplicava a opção na tela; e 'SHORTS' convive com 'SHORT'.
+    Preserva acento e caixa do valor exibido (CALÇA continua CALÇA).
+    """
+    if not isinstance(desc_sub_grupo_wbg, str):
+        return desc_sub_grupo_wbg
+    limpo = " ".join(desc_sub_grupo_wbg.split())
+    sinonimos = {norm(k): v for k, v in (_cfg_subgrupo().get("sinonimos") or {}).items()}
+    return sinonimos.get(norm(limpo), limpo)
 
 
 # --------------------------------------------------------------------------- #

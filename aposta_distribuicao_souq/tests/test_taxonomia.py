@@ -1,6 +1,24 @@
 import pytest
 
-from core.taxonomia import agrupar_cor, agrupar_material, norm
+from core.taxonomia import agrupar_cor, agrupar_material, norm, normalizar_subgrupo
+
+
+class TestNormalizarSubgrupo:
+    def test_remove_espaco_que_duplicava_a_opcao(self):
+        # o cadastro tem 'JAQUETA ' e 'JAQUETA' -> viravam 2 itens no dropdown
+        assert normalizar_subgrupo("JAQUETA ") == normalizar_subgrupo("JAQUETA") == "JAQUETA"
+        assert normalizar_subgrupo("BODY ") == "BODY"
+
+    def test_sinonimo_de_plural(self):
+        assert normalizar_subgrupo("SHORTS") == "SHORT"
+        assert normalizar_subgrupo("SHORT") == "SHORT"
+
+    def test_preserva_acento_e_caixa(self):
+        assert normalizar_subgrupo("CALÇA") == "CALÇA"
+        assert normalizar_subgrupo("CAMISÃO") == "CAMISÃO"
+
+    def test_nao_quebra_com_nulo(self):
+        assert normalizar_subgrupo(None) is None
 
 
 class TestNorm:

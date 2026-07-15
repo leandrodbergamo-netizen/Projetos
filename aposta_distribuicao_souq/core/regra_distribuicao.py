@@ -210,13 +210,22 @@ def distribuir(
     curva_tamanhos: Dict[str, float],
     reserva_cd_pct: float = 0.20,
     velocidades_semanais: Optional[Dict[str, float]] = None,
-    cobertura_max_semanas: float = 4.0,
+    cobertura_max_semanas: float = 6.0,
     grade_minima: float = 0.0,
+    max_por_tamanho_loja: Optional[int] = 4,
 ) -> ResultadoDistribuicao:
     """Executa o pipeline completo de distribuição inicial.
 
     Etapas: reserva CD -> participação com teto de cobertura -> grade mínima
-    -> arredondamento inteiro por loja -> abertura por tamanho (arredondada).
+    -> arredondamento inteiro por loja -> abertura por tamanho (arredondada)
+    -> teto por SKU-tamanho na loja.
+
+    Tetos da distribuição inicial (regra do negócio):
+    - `cobertura_max_semanas` (6): nenhuma loja recebe mais que o equivalente a
+      6 semanas da sua própria velocidade de venda (exige `velocidades_semanais`).
+    - `max_por_tamanho_loja` (4): nenhuma loja recebe mais que 4 peças do mesmo
+      SKU-tamanho. O que passa do teto volta ao CD.
+
     A sobra não distribuível (teto/grade) é reportada como `sobra_para_cd`.
     """
     avisos: List[str] = []
@@ -236,18 +245,36 @@ def distribuir(
     total_alocado = int(floor(sum(aloc.values()) + 1e-9))
     distrib_int = arredondar_maior_resto(aloc, total_alocado)
 
-    sobra = int(round(disponivel)) - sum(distrib_int.values())
-    if sobra > 0:
-        avisos.append(f"{sobra} unidade(s) não distribuída(s) (teto/grade) retornaram ao CD.")
-
     # abertura por tamanho, arredondada por loja para preservar o total da loja
     matriz: Dict[str, Dict[str, int]] = {}
+    cortado_teto = 0
     for loja, qtd in distrib_int.items():
         if qtd <= 0:
             matriz[loja] = {t: 0 for t in curva_tamanhos} if curva_tamanhos else {}
             continue
         continuo = abrir_por_tamanho(qtd, curva_tamanhos)
-        matriz[loja] = arredondar_maior_resto(continuo, qtd)
+        aberto = arredondar_maior_resto(continuo, qtd)
+        if max_por_tamanho_loja:
+            for tam, q in list(aberto.items()):
+                if q > max_por_tamanho_loja:
+                    cortado_teto += q - max_por_tamanho_loja
+                    aberto[tam] = max_por_tamanho_loja
+        matriz[loja] = aberto
+
+    # o teto por tamanho reduz o total da loja: refaz a partir da matriz
+    distrib_int = {loja: sum(tams.values()) for loja, tams in matriz.items()}
+    if cortado_teto:
+        avisos.append(
+            f"{cortado_teto} unidade(s) acima do teto de {max_por_tamanho_loja} "
+            "por SKU-tamanho/loja voltaram ao CD."
+        )
+
+    sobra = int(round(disponivel)) - sum(distrib_int.values())
+    if sobra > cortado_teto:
+        avisos.append(
+            f"{sobra - cortado_teto} unidade(s) não distribuída(s) (cobertura/grade) "
+            "retornaram ao CD."
+        )
 
     return ResultadoDistribuicao(
         reserva_cd=reserva,
@@ -271,40 +298,54 @@ def distribuir_por_loja(aposta: float, participacoes: Dict[str, float], teto_sem
 def participacao_com_loja_nova(
     part_hist: Dict[str, float],
     lojas_alvo: List[str],
-    cluster_por_loja: Dict[str, str],
+    cluster_por_loja: Dict[str, tuple],
 ) -> Dict[str, float]:
-    """Participação para TODAS as lojas-alvo, extrapolando as novas pelo Cluster.
+    """Participação para TODAS as lojas-alvo, extrapolando as novas pelo cluster.
 
     - `part_hist`: participação observada do(s) espelho(s) por loja (só lojas com
       histórico; SEM Ecom).
     - `lojas_alvo`: lojas físicas ativas que devem receber (inclui novas).
-    - `cluster_por_loja`: mapa loja -> Cluster (Base_Lojas).
+    - `cluster_por_loja`: mapa loja -> chave de cluster. A chave pode ser uma
+      tupla (ex.: (Perfil, Clima)); nesse caso o fallback afrouxa da chave cheia
+      para as parciais — necessário porque combinações reais podem não existir
+      (ex.: não há loja Perfil AB com clima Frio).
 
-    Loja nova (em `lojas_alvo` e sem histórico) herda a média da participação das
-    lojas do mesmo Cluster que têm histórico; sem cluster comparável, usa a média
-    geral. No fim, tudo é renormalizado para somar 1.
+    Loja nova herda a média das lojas com a mesma chave; sem par comparável,
+    afrouxa a chave; sem nada, usa a média geral. No fim renormaliza para somar 1.
     """
     if not part_hist:
         # sem histórico algum: distribuição uniforme entre as lojas-alvo
         return {l: 1.0 / len(lojas_alvo) for l in lojas_alvo} if lojas_alvo else {}
 
     media_geral = sum(part_hist.values()) / len(part_hist)
-    # média por cluster (apenas lojas com histórico)
-    soma_cl: Dict[str, float] = {}
-    cont_cl: Dict[str, int] = {}
+
+    def _chaves(loja) -> List[tuple]:
+        """Chave cheia + parciais, da mais específica para a mais frouxa."""
+        c = cluster_por_loja.get(loja)
+        if not isinstance(c, tuple):
+            return [(c,)]
+        return [tuple(c[: i + 1]) for i in range(len(c))][::-1] + [(x,) for x in c[1:]]
+
+    # média por chave (só lojas com histórico), em todos os níveis de afrouxamento
+    soma: Dict[tuple, float] = {}
+    cont: Dict[tuple, int] = {}
     for loja, p in part_hist.items():
-        cl = cluster_por_loja.get(loja)
-        soma_cl[cl] = soma_cl.get(cl, 0.0) + p
-        cont_cl[cl] = cont_cl.get(cl, 0) + 1
-    media_cluster = {cl: soma_cl[cl] / cont_cl[cl] for cl in soma_cl}
+        for k in _chaves(loja):
+            soma[k] = soma.get(k, 0.0) + p
+            cont[k] = cont.get(k, 0) + 1
+    media = {k: soma[k] / cont[k] for k in soma}
 
     resultado: Dict[str, float] = {}
     for loja in lojas_alvo:
         if loja in part_hist:
             resultado[loja] = part_hist[loja]
+            continue
+        for k in _chaves(loja):        # tenta do mais específico ao mais frouxo
+            if k in media:
+                resultado[loja] = media[k]
+                break
         else:
-            cl = cluster_por_loja.get(loja)
-            resultado[loja] = media_cluster.get(cl, media_geral)
+            resultado[loja] = media_geral
 
     total = sum(resultado.values())
     if total <= 0:

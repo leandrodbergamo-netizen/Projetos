@@ -1,0 +1,10 @@
+# Normalização de subgrupo (core/taxonomia.py -> normalizar_subgrupo).
+#
+# O cadastro traz o mesmo subgrupo escrito de formas diferentes — ex.: 'JAQUETA '
+# com espaço no fim convive com 'JAQUETA', e viravam duas opções na tela. O
+# espaço extra é removido automaticamente; aqui ficam só os sinônimos de fato.
+#
+# Chave: valor como está no cadastro (sem acento, maiúsculo). Valor: como exibir.
+
+sinonimos:
+  SHORTS: SHORT       # 5 produtos escritos no plural vs 297 no singular

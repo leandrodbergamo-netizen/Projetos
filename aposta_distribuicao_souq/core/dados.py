@@ -14,7 +14,9 @@ Definições de negócio adotadas (documentadas; ajustáveis por parâmetro):
 """
 from __future__ import annotations
 
+import math
 import os
+from datetime import date
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -223,17 +225,46 @@ def lojas_souq(caminho: Optional[str] = None, incluir_ecom: bool = True) -> pd.D
     return df
 
 
-def lojas_alvo_souq(caminho: Optional[str] = None) -> pd.DataFrame:
+def lojas_alvo_souq(
+    caminho: Optional[str] = None,
+    perfis: Optional[Iterable[str]] = None,
+    climas: Optional[Iterable[str]] = None,
+) -> pd.DataFrame:
     """Lojas físicas Souq ativas (sem Ecom, sem loja fechada) — destino da
-    distribuição física."""
+    distribuição física.
+
+    `perfis` (Perfil Econômico) e `climas` (Temperatura) restringem o parque-alvo;
+    None/vazio = todas.
+    """
     lj = lojas_souq(caminho, incluir_ecom=False)
-    return lj[lj["dt_fechamento"].isna()]
+    lj = lj[lj["dt_fechamento"].isna()]
+    if perfis:
+        lj = lj[lj["Perfil"].isin(list(perfis))]
+    if climas:
+        lj = lj[lj["Temperatura"].isin(list(climas))]
+    return lj
 
 
 def cluster_por_loja(caminho: Optional[str] = None) -> dict:
-    """Mapa sk_localidade (str, ex '122.0') -> Cluster (Base_Lojas)."""
+    """Mapa sk_localidade (str, ex '122.0') -> (Perfil Econômico, Clima).
+
+    É a chave usada para extrapolar a participação de loja nova. A tupla permite
+    afrouxar para só o Perfil quando a combinação exata não existir no parque
+    (ex.: não há loja Perfil AB com clima Frio)."""
     lj = carregar_lojas(caminho)
-    return {str(float(r["sk_localidade"])): r.get("Cluster") for _, r in lj.iterrows()}
+    return {
+        str(float(r["sk_localidade"])): (r.get("Perfil"), r.get("Temperatura"))
+        for _, r in lj.iterrows()
+    }
+
+
+def opcoes_perfil_clima(caminho: Optional[str] = None) -> dict:
+    """Valores disponíveis de Perfil Econômico e Clima nas lojas Souq ativas."""
+    lj = lojas_alvo_souq(caminho)
+    return {
+        "perfis": sorted(lj["Perfil"].dropna().unique().tolist()),
+        "climas": sorted(lj["Temperatura"].dropna().unique().tolist()),
+    }
 
 
 def localidades_ecom(caminho: Optional[str] = None) -> set:
@@ -285,6 +316,45 @@ def rank_colecao(colecao) -> Optional[float]:
             return float(min(anos)) + 0.5
         return float(anos[0]) - 0.5  # verão de ano único: temporada terminando no ano
     return float(anos[0])
+
+
+def colecoes_projetaveis(ano_base: int, adiante: int = 3) -> list[str]:
+    """Coleções que se pode apostar, da mais próxima para a mais distante.
+
+    Gera os rótulos (INVERNO YYYY / VERÃO YYYY-YYYY+1) em vez de ler do cadastro,
+    porque a coleção-alvo normalmente **ainda não existe** na base quando a
+    aposta é feita (ex.: INVERNO 2027).
+    """
+    saida = []
+    for ano in range(ano_base, ano_base + adiante + 1):
+        saida.append((float(ano), f"INVERNO {ano}"))
+        saida.append((ano + 0.5, f"VERÃO {ano}-{ano + 1}"))
+    return [nome for _, nome in sorted(saida)]
+
+
+def fim_periodo_saudavel(colecao: str, fim_verao: str = "02/01",
+                         fim_inverno: str = "14/06") -> Optional[date]:
+    """Data em que a coleção deve estar saudavelmente encerrada.
+
+    Premissa do negócio: VERÃO termina em 02/01 do ano seguinte ao de início
+    (VERÃO 2026-2027 -> 02/01/2027) e INVERNO em 14/06 do próprio ano
+    (INVERNO 2027 -> 14/06/2027). É o que define o horizonte da projeção.
+    """
+    rank = rank_colecao(colecao)
+    if rank is None:
+        return None
+    dia_v, mes_v = (int(x) for x in fim_verao.split("/"))
+    dia_i, mes_i = (int(x) for x in fim_inverno.split("/"))
+    if float(rank).is_integer():           # INVERNO YYYY -> rank = YYYY
+        return date(int(rank), mes_i, dia_i)
+    return date(int(rank) + 1, mes_v, dia_v)  # VERÃO YYYY-YYYY+1 -> rank = YYYY.5
+
+
+def semanas_ate(dt_entrada, dt_fim, minimo: int = 1, maximo: int = 52) -> int:
+    """Semanas inteiras entre a entrada em loja e o fim do período (>= `minimo`)."""
+    d0, d1 = pd.Timestamp(dt_entrada), pd.Timestamp(dt_fim)
+    semanas = int(math.ceil((d1 - d0).days / 7))
+    return max(minimo, min(semanas, maximo))
 
 
 def filtrar_colecoes(

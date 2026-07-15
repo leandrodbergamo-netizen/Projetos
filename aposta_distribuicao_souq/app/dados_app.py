@@ -79,6 +79,18 @@ def opcoes(coluna: str) -> list[str]:
     return sorted(s.unique().tolist())
 
 
+def opcoes_por_relevancia(coluna: str, ultimos=("Outros", "Indefinido")) -> list[str]:
+    """Valores ordenados por volume de produtos (mais relevante primeiro).
+
+    Buckets residuais (`Outros`/`Indefinido`) vão para o fim da lista, por mais
+    numerosos que sejam: ninguém procura por eles primeiro.
+    """
+    vc = produtos_prep()[coluna].dropna().astype(str).value_counts()
+    principais = [v for v in vc.index if v not in ultimos]
+    finais = [v for v in vc.index if v in ultimos]
+    return principais + finais
+
+
 def recarregar_bases() -> None:
     """Relê os Excel (ignorando o cache parquet) e limpa o cache do Streamlit.
 
