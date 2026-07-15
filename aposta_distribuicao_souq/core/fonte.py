@@ -58,8 +58,26 @@ def usa_supabase() -> bool:
     return fonte() in ("supabase", "db", "postgres")
 
 
+_ESQUEMAS = ("postgresql+psycopg2://", "postgresql://", "postgres://")
+
+
 def db_url() -> str:
-    return segredo("DATABASE_URL")
+    """String de conexão, tolerando colagens comuns.
+
+    Aceita valor entre aspas, com o próprio nome da chave na frente
+    (`DATABASE_URL=...`) e os esquemas `postgres://` / `postgresql://`, que
+    normaliza para `postgresql+psycopg2://`.
+    """
+    v = segredo("DATABASE_URL").strip()
+    if not v:
+        return ""
+    if v.lower().startswith("database_url"):      # colou a linha inteira
+        v = v.split("=", 1)[-1].strip()
+    v = v.strip('"').strip("'").strip()
+    for esq in ("postgres://", "postgresql://"):  # normaliza p/ o driver do Python
+        if v.startswith(esq):
+            return "postgresql+psycopg2://" + v[len(esq):]
+    return v
 
 
 def engine():
@@ -68,7 +86,15 @@ def engine():
     url = db_url()
     if not url:
         raise RuntimeError(
-            "DATABASE_URL não configurada. No PC use o .env; na nuvem, os Secrets."
+            "DATABASE_URL não configurada. No PC use o .env; na nuvem, os Secrets "
+            "do Streamlit (Manage app > Settings > Secrets)."
+        )
+    if not url.startswith(_ESQUEMAS):
+        # Mostra só o começo — nunca a senha — para dar para diagnosticar.
+        raise RuntimeError(
+            f"DATABASE_URL não parece uma conexão Postgres: começa com {url[:15]!r}. "
+            "Ela deve começar com 'postgresql+psycopg2://'. Copie o valor que está "
+            "no arquivo .env do projeto (o mesmo que já funciona no seu PC)."
         )
     return create_engine(url, pool_pre_ping=True)
 
