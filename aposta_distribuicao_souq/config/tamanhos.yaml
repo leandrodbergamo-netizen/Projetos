@@ -1,0 +1,41 @@
+# Unificação de tamanhos (core/taxonomia.py -> agrupar_tamanho).
+#
+# Produtos do mesmo grupo alternam entre grade em letra (PMG) e numerária
+# (36-46). O de-para abaixo junta os equivalentes no mesmo bucket — regra do
+# negócio: 36|XPP, 38|PP, 40|P, 42|M, 44|G, 46|GG. Ou seja: tamanho "36" cai em
+# "36|XPP" e tamanho "XPP" também.
+#
+# `ordem` é a sequência de exibição/seleção (do menor para o maior; U ao final).
+# 34 (1 peça) e EGG (2 peças) são raridades — mapeadas nas pontas para não se
+# perderem; valide se preferir outro destino.
+
+ordem:
+  - 34|XXPP
+  - 36|XPP
+  - 38|PP
+  - 40|P
+  - 42|M
+  - 44|G
+  - 46|GG
+  - 48|EGG
+  - U
+
+mapa:
+  "34": 34|XXPP
+  XXPP: 34|XXPP
+  "36": 36|XPP
+  XPP: 36|XPP
+  "38": 38|PP
+  PP: 38|PP
+  "40": 40|P
+  P: 40|P
+  "42": 42|M
+  M: 42|M
+  "44": 44|G
+  G: 44|G
+  "46": 46|GG
+  GG: 46|GG
+  "48": 48|EGG
+  EGG: 48|EGG
+  XGG: 48|EGG
+  U: U

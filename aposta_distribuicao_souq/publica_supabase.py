@@ -31,6 +31,7 @@ COLS_PRODUTOS = [
     "sk_produto", "cod_produto", "cod_sku_pai", "desc_item", "desc_colecao",
     "desc_sub_grupo_wbg", "desc_grupo_wgb", "desc_cor", "desc_tamanho",
     "desc_manga", "desc_comprimento", "desc_fit", "desc_material", "dt_envio",
+    "tamanho_grupo",   # bucket unificado de tamanho (36≡XPP...) — grade e curva
     "url", "preco", "grupo_material", "cor_grupo", "faixa", "rank_colecao",
     # janela full price (entrada em loja -> liquidação): denominador da velocidade
     "dt_entrada_loja", "dt_liquidacao",

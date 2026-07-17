@@ -83,6 +83,47 @@ class TestCandidatosEspelho:
                                         min_candidatos=2)
         assert sorted(cand["cod_sku_pai"]) == ["A", "B"] and soft == []
 
+    def test_grade_exige_espelho_que_cubra_todos_os_tamanhos(self):
+        # A: PP–GG completo | B: só P–G | C: numerário 36–46 (≡ XPP–GG, cobre)
+        def linhas(sku, tams):
+            return [{"cod_sku_pai": sku, "desc_sub_grupo_wbg": "VESTIDO",
+                     "desc_grupo_wgb": "TECIDO PLANO", "faixa": "P1",
+                     "grupo_material": "Linho", "cor_grupo": "Azul",
+                     "desc_manga": None, "desc_comprimento": None, "desc_fit": None,
+                     "desc_colecao": "INVERNO 2023", "rank_colecao": 2023.0,
+                     "desc_item": sku, "preco": 498.0, "tamanho_grupo": t}
+                    for t in tams]
+        import pandas as pd
+        alvo = ["38|PP", "40|P", "42|M", "44|G", "46|GG"]
+        cat = pd.DataFrame(
+            linhas("A", alvo)
+            + linhas("B", ["40|P", "42|M", "44|G"])
+            + linhas("C", ["36|XPP"] + alvo)          # numerário unificado: superset
+        )
+        cand, soft = candidatos_espelho(cat, subgrupo="VESTIDO", grupo="TECIDO PLANO",
+                                        faixa="P1", tecido="Linho", grade=alvo,
+                                        min_candidatos=1)
+        assert sorted(cand["cod_sku_pai"].unique()) == ["A", "C"]   # B não cobre PP/GG
+        assert "grade" in soft
+
+    def test_grade_afrouxa_se_nao_sobrar_candidato(self):
+        def linhas(sku, tams):
+            return [{"cod_sku_pai": sku, "desc_sub_grupo_wbg": "VESTIDO",
+                     "desc_grupo_wgb": "TECIDO PLANO", "faixa": "P1",
+                     "grupo_material": "Linho", "cor_grupo": "Azul",
+                     "desc_manga": None, "desc_comprimento": None, "desc_fit": None,
+                     "desc_colecao": "INVERNO 2023", "rank_colecao": 2023.0,
+                     "desc_item": sku, "preco": 498.0, "tamanho_grupo": t}
+                    for t in tams]
+        import pandas as pd
+        cat = pd.DataFrame(linhas("B", ["40|P", "42|M", "44|G"]))
+        cand, soft = candidatos_espelho(cat, subgrupo="VESTIDO", grupo="TECIDO PLANO",
+                                        faixa="P1", tecido="Linho",
+                                        grade=["38|PP", "40|P", "42|M", "44|G", "46|GG"],
+                                        min_candidatos=1)
+        assert cand["cod_sku_pai"].tolist() == ["B"]    # afrouxou em vez de zerar
+        assert soft == []
+
     def test_colecao_fora_do_escopo_nao_vira_candidato(self):
         cat = _catalogo([("A", "Azul", "MANGA LONGA", "INVERNO 2023"),
                          ("P", "Azul", "MANGA LONGA", "PERENE"),

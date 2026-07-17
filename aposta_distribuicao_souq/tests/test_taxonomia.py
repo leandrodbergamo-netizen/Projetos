@@ -1,6 +1,34 @@
 import pytest
 
-from core.taxonomia import agrupar_cor, agrupar_material, norm, normalizar_subgrupo
+from core.taxonomia import (agrupar_cor, agrupar_material, agrupar_tamanho, norm,
+                            normalizar_subgrupo, ordem_tamanhos, rotulo_grade)
+
+
+class TestAgruparTamanho:
+    def test_numerario_e_letra_caem_no_mesmo_bucket(self):
+        # regra do negócio: 36|XPP, 38|PP, 40|P, 42|M, 44|G, 46|GG
+        assert agrupar_tamanho("36") == agrupar_tamanho("XPP") == "36|XPP"
+        assert agrupar_tamanho("38") == agrupar_tamanho("PP") == "38|PP"
+        assert agrupar_tamanho("40") == agrupar_tamanho("P") == "40|P"
+        assert agrupar_tamanho("42") == agrupar_tamanho("M") == "42|M"
+        assert agrupar_tamanho("44") == agrupar_tamanho("G") == "44|G"
+        assert agrupar_tamanho("46") == agrupar_tamanho("GG") == "46|GG"
+
+    def test_unico_e_desconhecido(self):
+        assert agrupar_tamanho("U") == "U"
+        assert agrupar_tamanho("59") is None
+        assert agrupar_tamanho(None) is None
+
+    def test_ordem_do_menor_para_o_maior(self):
+        o = ordem_tamanhos()
+        assert o.index("38|PP") < o.index("42|M") < o.index("46|GG")
+
+    def test_rotulo_compacto(self):
+        assert rotulo_grade({"38|PP", "40|P", "42|M", "44|G", "46|GG"}) == "PP–GG"
+        assert rotulo_grade({"36|XPP", "38|PP", "40|P", "42|M", "44|G", "46|GG"}) == "XPP–GG"
+        assert rotulo_grade({"U"}) == "U"
+        assert rotulo_grade({"38|PP", "44|G"}) == "PP/G"     # não contígua: lista
+        assert rotulo_grade(set()) == "—"
 
 
 class TestNormalizarSubgrupo:

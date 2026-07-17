@@ -19,8 +19,8 @@ import pandas as pd
 from core.dados import datas_liquidacao, rank_colecao
 from core.regra_distribuicao import reservar_cd
 from core.sazonalidade import fator_janela, semanas_equivalentes
-from core.taxonomia import (agrupar_cor, agrupar_material, faixa_preco_series,
-                            normalizar_subgrupo)
+from core.taxonomia import (agrupar_cor, agrupar_material, agrupar_tamanho,
+                            faixa_preco_series, normalizar_subgrupo)
 
 # Colunas exibidas na tabela de candidatos. Manga/comprimento/fit entram como
 # informação de CONSULTA (ajudam o comprador a escolher), não como filtro: o eta²
@@ -30,8 +30,9 @@ COLS_EXIBE = [
     "grupo_material", "desc_cor", "cor_grupo", "faixa", "preco",
     "desc_manga", "desc_comprimento", "desc_fit",
 ]
-# Único filtro afrouxável: cor é a variável mais preditiva (eta² 0,09).
-SOFT_PADRAO = ["cor_grupo"]
+# Filtros afrouxáveis (a cor solta primeiro; a grade, por último): cor é a
+# variável mais preditiva (eta² 0,09); grade garante que a curva de tamanhos do
+# espelho informe todos os tamanhos da aposta.
 
 
 # --------------------------------------------------------------------------- #
@@ -55,6 +56,8 @@ def preparar_produtos(produtos: pd.DataFrame, apenas_roupa: bool = True) -> pd.D
         agrupar_material(g, m) for g, m in zip(df.get("desc_grupo_wgb"), df.get("desc_material"))
     ]
     df["cor_grupo"] = [agrupar_cor(c) for c in df.get("desc_cor")]
+    # bucket unificado de tamanho: '36' e 'XPP' viram ambos '36|XPP'
+    df["tamanho_grupo"] = df["desc_tamanho"].map(agrupar_tamanho)
     df["rank_colecao"] = df.get("desc_colecao").map(rank_colecao)
     # preço de referência: tabela, com fallback para o descontado
     df["preco"] = df["preco_tabela"]
@@ -100,17 +103,21 @@ def candidatos_espelho(
     faixa: Optional[str] = None,
     tecido: Optional[str] = None,
     cor_grupo=None,
+    grade=None,
     desde_colecao: float = 2022.0,
     relaxar: bool = True,
     min_candidatos: int = 5,
-    soft_ordem: Optional[list[str]] = None,
 ) -> tuple[pd.DataFrame, list[str]]:
     """Retorna (candidatos, filtros_soft_aplicados).
 
     Hard: subgrupo + grupo + faixa + tecido + coleção >= desde. Coleção fora do
     escopo (PERENE/ALTO VERÃO/CANCELADO) tem rank NaN e cai fora sozinha.
-    Soft: apenas cor, afrouxada se sobrarem menos de `min_candidatos`.
-    `cor_grupo` aceita uma cor ou uma lista (vazio/None = todas as cores).
+    Soft (afrouxados nesta ordem se faltar candidato): cor, depois grade.
+    - `cor_grupo`: uma cor ou lista (vazio/None = todas).
+    - `grade`: buckets de tamanho da aposta (ex.: {"38|PP",...,"46|GG"}). O
+      espelho precisa ter vendido TODOS os tamanhos da grade (grade dele ⊇ alvo)
+      — senão a curva dele não informa os tamanhos que faltam. Como a grade
+      numerária é unificada (36–46 ≡ XPP–GG), os dois formatos casam.
     Manga/comprimento/fit NÃO filtram — vão na tabela como consulta.
     Data NÃO é critério (só posiciona a janela sazonal).
     """
@@ -126,23 +133,41 @@ def candidatos_espelho(
     if isinstance(cor_grupo, str):
         cor_grupo = [cor_grupo]
     cores = list(cor_grupo) if cor_grupo else None
-    soft_vals = {"cor_grupo": cores}
-    ativos = [c for c in (soft_ordem or SOFT_PADRAO) if soft_vals.get(c) and c in base.columns]
+    alvo = set(grade) if grade else None
 
-    def aplica(cols):
+    # filtros soft como máscaras nomeadas; o primeiro da lista afrouxa primeiro
+    softs: list[tuple[str, pd.Series]] = []
+    if cores:
+        softs.append(("cor_grupo", base["cor_grupo"].isin(cores)))
+    if alvo and "tamanho_grupo" in base.columns:
+        grades = grades_por_modelo(base)
+        cobre = base["cod_sku_pai"].map(lambda s: alvo <= grades.get(s, set()))
+        softs.append(("grade", cobre))
+
+    usados = [nome for nome, _ in softs]
+
+    def aplica(nomes):
         m = pd.Series(True, index=base.index)
-        for c in cols:
-            m &= base[c].isin(soft_vals[c])
+        for nome, mask in softs:
+            if nome in nomes:
+                m &= mask
         return base[m]
 
-    usados = list(ativos)
     cand = aplica(usados)
     while relaxar and len(cand) < min_candidatos and usados:
-        usados.pop(0)  # solta o filtro soft menos relevante
+        usados.pop(0)  # solta o filtro soft menos relevante primeiro (cor)
         cand = aplica(usados)
 
     cols = [c for c in COLS_EXIBE if c in cand.columns]
     return cand[cols].drop_duplicates("cod_sku_pai"), usados
+
+
+def grades_por_modelo(produtos_prep: pd.DataFrame) -> dict:
+    """{cod_sku_pai: conjunto de buckets de tamanho em que o modelo existiu}."""
+    if "tamanho_grupo" not in produtos_prep.columns:
+        return {}
+    g = produtos_prep.dropna(subset=["tamanho_grupo"]).groupby("cod_sku_pai")["tamanho_grupo"]
+    return g.apply(set).to_dict()
 
 
 def janelas_full_price(produtos_prep: pd.DataFrame) -> dict:

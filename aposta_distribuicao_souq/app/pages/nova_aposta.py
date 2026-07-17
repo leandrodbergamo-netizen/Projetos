@@ -17,12 +17,12 @@ from app.dados_app import (contexto_lojas, opcoes, opcoes_por_relevancia,
 from core.config_utils import load_config
 from core.dados import (colecoes_projetaveis, curva_tamanhos, fim_periodo_saudavel,
                         participacao_lojas, semanas_ate)
-from core.espelho import (candidatos_espelho, enriquecer_velocidade, janelas_full_price,
-                          projetar_aposta, velocidade_de_cada_loja,
+from core.espelho import (candidatos_espelho, enriquecer_velocidade, grades_por_modelo,
+                          janelas_full_price, projetar_aposta, velocidade_de_cada_loja,
                           velocidade_por_loja_desaz)
 from core.regra_distribuicao import participacao_com_loja_nova
 from core.sazonalidade import curva_por
-from core.taxonomia import faixa_preco
+from core.taxonomia import faixa_preco, ordem_tamanhos, rotulo_grade
 
 GRUPOS = ["TECIDO PLANO", "MALHA", "TRICOT", "JEANS"]
 
@@ -74,6 +74,14 @@ def render() -> None:
             "Reserva CD (%)", 0, 50, int(round(100 * float(cfg.get("reserva_cd_pct", 0.20)))), 1,
             help="Parcela da aposta que fica no CD para reposição.") / 100.0
 
+    todos_tam = ordem_tamanhos()
+    grade_padrao = [t for t in todos_tam if t in {"38|PP", "40|P", "42|M", "44|G", "46|GG"}]
+    grade_sel = st.multiselect(
+        "Grade de tamanhos da aposta", todos_tam, default=grade_padrao,
+        help="Tamanhos que o produto novo vai ter. Letra e numeração são equivalentes "
+             "(36≡XPP, 38≡PP, 40≡P, 42≡M, 44≡G, 46≡GG); o espelho precisa ter vendido "
+             "todos os tamanhos da grade.")
+
     # horizonte = da entrada até o fim saudável da coleção
     fim = fim_periodo_saudavel(colecao, cfg.get("fim_periodo_verao", "02/01"),
                                cfg.get("fim_periodo_inverno", "14/06"))
@@ -90,7 +98,8 @@ def render() -> None:
     # -------------------------------------------------------------- candidatos
     cand, soft = candidatos_espelho(
         pp, subgrupo=subgrupo, grupo=grupo, faixa=fx, tecido=tecido,
-        cor_grupo=cores or None, desde_colecao=float(cfg.get("desde_colecao", 2022.0)),
+        cor_grupo=cores or None, grade=grade_sel or None,
+        desde_colecao=float(cfg.get("desde_colecao", 2022.0)),
     )
     curva, nivel = curva_por(fp, subgrupo=subgrupo, material=tecido)
     if cand.empty:
@@ -110,8 +119,12 @@ def render() -> None:
 
     st.subheader(f"Candidatos a espelho ({len(cand)}) — curva sazonal: {nivel}")
     ocultos = total_bruto - len(cand)
+    filtros = []
+    filtros.append("cor mantida" if "cor_grupo" in soft else ("cor afrouxada" if cores else "sem filtro de cor"))
+    if grade_sel:
+        filtros.append("grade mantida" if "grade" in soft else "grade afrouxada (poucos candidatos)")
     st.caption(
-        f"{'Filtro de cor mantido' if soft else 'Sem filtro de cor'}"
+        " · ".join(filtros).capitalize()
         + (f" · {ocultos} sem histórico de venda ocultado(s)" if ocultos else "")
         + " · manga/comprimento/fit são apenas consulta. Marque os espelhos a usar."
     )
@@ -120,6 +133,7 @@ def render() -> None:
     tot = totais_por_sku()
     cand = cand.merge(tot, on="cod_sku_pai", how="left")
     aprov_real = (cand["unidades"] / cand["unid_total"]).clip(upper=1.0)
+    grades = grades_por_modelo(pp)
 
     sel_todos = st.checkbox("Selecionar todos", value=False)
     tabela = pd.DataFrame({
@@ -129,6 +143,7 @@ def render() -> None:
         "cod_sku_pai": cand["cod_sku_pai"],
         "coleção": cand.get("desc_colecao"),
         "tecido": cand.get("grupo_material"),
+        "grade": cand["cod_sku_pai"].map(lambda s: rotulo_grade(grades.get(s))),
         "cor": cand.get("cor_grupo"),
         "preço": cand.get("preco"),
         "manga": cand.get("desc_manga"),
@@ -181,13 +196,23 @@ def render() -> None:
         # + velocidade de cada loja (alimenta o teto de cobertura)
         skus = [v.cod_sku_pai for v in vels]
         fp_esp_fisico = fp[fp["cod_sku_pai"].isin(skus) & ~fp["sk_localidade"].isin(ctx["ecom_locs"])]
+        # curva por bucket unificado (36≡XPP...), restrita à grade da aposta.
+        # Tamanho da grade sem venda nos espelhos entra com peso mínimo para não
+        # ficar de fora da matriz (a grade foi decisão de compra).
+        curva_tam = curva_tamanhos(fp[fp["cod_sku_pai"].isin(skus)], pp,
+                                   col_tamanho="tamanho_grupo")
+        if grade_sel:
+            curva_tam = {t: p for t, p in curva_tam.items() if t in set(grade_sel)}
+            piso = min(curva_tam.values()) / 2 if curva_tam else 1.0
+            for t in grade_sel:
+                curva_tam.setdefault(t, piso)
+
         st.session_state["projecao"] = {
             "resumo": f"{subgrupo}/{grupo}/{tecido} · R${preco:.0f} · faixa {fx} · {colecao}",
             "aposta_total": ap.aposta_sugerida,
             "reserva_cd_pct": reserva_pct,
             "participacoes_hist": participacao_lojas(fp_esp_fisico),
-            "curva_tamanhos": curva_tamanhos(fp[fp["cod_sku_pai"].isin(skus)], pp,
-                                             col_tamanho="desc_tamanho"),
+            "curva_tamanhos": curva_tam,
             "velocidades_loja": velocidade_de_cada_loja(fp, skus, curva, ctx["ecom_locs"]),
             "espelhos": skus,
         }

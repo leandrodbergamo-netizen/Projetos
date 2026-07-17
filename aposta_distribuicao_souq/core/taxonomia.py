@@ -83,6 +83,45 @@ def normalizar_subgrupo(desc_sub_grupo_wbg):
 
 
 # --------------------------------------------------------------------------- #
+# Tamanho (unifica grade em letra e numerária)
+# --------------------------------------------------------------------------- #
+@lru_cache(maxsize=1)
+def _cfg_tamanho() -> dict:
+    caminho = CONFIG_DIR / "tamanhos.yaml"
+    if not caminho.exists():
+        return {"ordem": [], "mapa": {}}
+    with caminho.open("r", encoding="utf-8") as fh:
+        return yaml.safe_load(fh) or {"ordem": [], "mapa": {}}
+
+
+def agrupar_tamanho(desc_tamanho) -> Optional[str]:
+    """Bucket unificado do tamanho: '36' e 'XPP' caem ambos em '36|XPP'."""
+    t = norm(desc_tamanho)
+    if not t:
+        return None
+    mapa = {norm(k): v for k, v in _cfg_tamanho()["mapa"].items()}
+    return mapa.get(t)
+
+
+def ordem_tamanhos() -> list[str]:
+    """Buckets de tamanho na ordem de exibição (menor -> maior; U ao final)."""
+    return list(_cfg_tamanho()["ordem"])
+
+
+def rotulo_grade(buckets) -> str:
+    """Rótulo compacto de uma grade: contígua vira 'PP–GG'; senão lista tudo."""
+    ordem = ordem_tamanhos()
+    presentes = [b for b in ordem if b in set(buckets or [])]
+    if not presentes:
+        return "—"
+    curto = [b.split("|")[-1] for b in presentes]
+    idx = [ordem.index(b) for b in presentes]
+    if idx == list(range(idx[0], idx[-1] + 1)) and len(presentes) > 1:
+        return f"{curto[0]}–{curto[-1]}"
+    return "/".join(curto)
+
+
+# --------------------------------------------------------------------------- #
 # Material (tecido)
 # --------------------------------------------------------------------------- #
 def agrupar_material(desc_grupo_wgb, desc_material) -> str:
