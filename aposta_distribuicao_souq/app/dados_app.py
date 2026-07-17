@@ -62,6 +62,28 @@ def vendas_fp() -> pd.DataFrame:
     return construir_vendas(produtos_prep())
 
 
+def construir_totais(produtos_preparados: pd.DataFrame) -> pd.DataFrame:
+    """Unidades vendidas por modelo em QUALQUER condição (full price + liquidação).
+
+    É o denominador do "aproveitamento realizado": FP ÷ total. O numerador (FP)
+    já vem de `vendas_fp`; aqui não se filtra `flag_liquidacao`.
+    """
+    v = pd.concat([_ler_ano(a) for a in ANOS], ignore_index=True)
+    t = escopo_souq(v)
+    t = t[(t["tipo_venda"] == "venda") & (t["qtd_produto"] > 0)]
+    chave = produtos_preparados.drop_duplicates("sk_produto").set_index("sk_produto")["cod_sku_pai"]
+    t = t.assign(cod_sku_pai=t["sk_produto"].map(chave)).dropna(subset=["cod_sku_pai"])
+    agg = t.groupby("cod_sku_pai")["qtd_produto"].sum().reset_index()
+    return agg.rename(columns={"qtd_produto": "unid_total"})
+
+
+@st.cache_data(show_spinner=False)
+def totais_por_sku() -> pd.DataFrame:
+    if fonte.usa_supabase():
+        return fonte.ler_tabela("totais")
+    return construir_totais(produtos_prep())
+
+
 @st.cache_data(show_spinner=False)
 def contexto_lojas() -> dict:
     alvo = lojas_alvo_souq()

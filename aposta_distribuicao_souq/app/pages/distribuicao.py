@@ -18,9 +18,15 @@ from core.regra_distribuicao import distribuir, participacao_com_loja_nova
 TODOS = "TODOS"
 
 
-def _mostra_resultado(resultado, lojas_df):
+def _mostra_resultado(resultado, lojas_df, reserva_planejada=None, aposta_total=None):
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Reserva CD", f"{resultado.reserva_cd:.0f}")
+    # a garantia de grade pode consumir a reserva do CD: o delta mostra quanto
+    delta = None
+    if reserva_planejada is not None and abs(resultado.reserva_cd - reserva_planejada) >= 0.5:
+        delta = f"{resultado.reserva_cd - reserva_planejada:.0f} un vs planejado"
+    pct = f" ({100 * resultado.reserva_cd / aposta_total:.0f}%)" if aposta_total else ""
+    m1.metric("Reserva CD" + pct, f"{resultado.reserva_cd:.0f}", delta=delta,
+              delta_color="inverse" if delta else "off")
     m2.metric("Disponível lojas", f"{resultado.disponivel_lojas:.0f}")
     m3.metric("Distribuído", f"{resultado.total_distribuido()}")
     m4.metric("Sobra p/ CD", f"{resultado.sobra_para_cd}")
@@ -84,8 +90,9 @@ def render() -> None:
     n_tam = len([t for t, p in (proj["curva_tamanhos"] or {}).items() if p > 0])
     garantir = st.checkbox(
         "Garantir ao menos 1 peça por tamanho", value=False,
-        help=f"A curva tem {n_tam} tamanhos: a loja só entra se receber {n_tam}+ peças "
-             "(1 de cada). Quem não alcançar sai e sua quota é redistribuída.")
+        help=f"Piso universal: TODAS as lojas-alvo recebem 1 de cada um dos {n_tam} tamanhos "
+             "({n} peças no mínimo). O piso é atendido primeiro — reduz o rateio das demais "
+             "e, se faltar, consome a reserva do CD (o indicador mostra a reserva efetiva).".format(n=n_tam))
     st.caption(f"Tetos (Configurações): máx. **{cobertura:.0f} semanas** de cobertura por loja e "
                f"máx. **{max_tam} peças** do mesmo SKU-tamanho por loja.")
 
@@ -100,4 +107,6 @@ def render() -> None:
             max_por_tamanho_loja=max_tam,
             garantir_grade_completa=garantir,
         )
-        _mostra_resultado(resultado, lojas_df)
+        reserva_planejada = proj["aposta_total"] * proj.get("reserva_cd_pct", 0.20)
+        _mostra_resultado(resultado, lojas_df, reserva_planejada=reserva_planejada,
+                          aposta_total=proj["aposta_total"])

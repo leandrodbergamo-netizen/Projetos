@@ -10,13 +10,11 @@ def render() -> None:
     cfg = load_config()
 
     st.subheader("Aposta")
-    c1, c2 = st.columns(2)
-    aproveitamento = c1.number_input(
-        "Aproveitamento", 0.0, 1.0, float(cfg.get("aproveitamento", 0.70)), 0.01,
-        help="Fração da aposta que se espera vender no período.")
-    reserva_cd_pct = c2.number_input(
-        "Reserva CD (%) — padrão", 0.0, 1.0, float(cfg.get("reserva_cd_pct", 0.20)), 0.01,
-        help="Valor inicial sugerido na aba Nova Aposta.")
+    st.caption("Aproveitamento e reserva CD são editados na própria aba Nova Aposta.")
+    reserva_cd_pct = st.number_input(
+        "Reserva CD padrão (%)", 0, 50,
+        int(round(100 * float(cfg.get("reserva_cd_pct", 0.20)))), 1,
+        help="Valor inicial sugerido na aba Nova Aposta.") / 100.0
 
     st.subheader("Fim de período saudável")
     st.caption("Define até quando a coleção deve estar vendida — é o que determina o horizonte da projeção.")
@@ -45,7 +43,6 @@ def render() -> None:
 
     if st.button("Salvar parâmetros", type="primary"):
         cfg.update({
-            "aproveitamento": aproveitamento,
             "reserva_cd_pct": reserva_cd_pct,
             "fim_periodo_verao": fim_verao.strip(),
             "fim_periodo_inverno": fim_inverno.strip(),

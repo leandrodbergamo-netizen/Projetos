@@ -40,7 +40,8 @@ COLS_PRODUTOS = [
 def construir() -> dict[str, pd.DataFrame]:
     """Monta as 4 tabelas a partir das bases locais."""
     # Importado aqui para não exigir streamlit fora do app.
-    from app.dados_app import COLS_VENDAS, construir_produtos, construir_vendas
+    from app.dados_app import (COLS_VENDAS, construir_produtos, construir_totais,
+                               construir_vendas)
 
     print("Preparando cadastro...", flush=True)
     produtos = construir_produtos()
@@ -52,6 +53,7 @@ def construir() -> dict[str, pd.DataFrame]:
         "vendas": vendas[[c for c in COLS_VENDAS if c in vendas.columns]],
         "lojas": carregar_lojas(),
         "faixas": _tabela_faixas(),
+        "totais": construir_totais(produtos),   # denominador do aproveitamento realizado
     }
 
 

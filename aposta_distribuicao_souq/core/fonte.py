@@ -26,7 +26,7 @@ except Exception:
     pass
 
 PREFIXO = "aposta_"
-TABELAS = ("produtos", "vendas", "lojas", "faixas")
+TABELAS = ("produtos", "vendas", "lojas", "faixas", "totais")
 
 # Colunas de data por tabela — o ida-e-volta pelo Postgres perde o tipo.
 _COLS_DATA = {

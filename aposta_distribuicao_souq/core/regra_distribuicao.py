@@ -245,9 +245,12 @@ def distribuir(
       6 semanas da sua própria velocidade de venda (exige `velocidades_semanais`).
     - `max_por_tamanho_loja` (4): nenhuma loja recebe mais que 4 peças do mesmo
       SKU-tamanho. O que passa do teto volta ao CD.
-    - `garantir_grade_completa`: só entra a loja que receber **ao menos 1 peça de
-      cada tamanho** da curva; quem não alcança sai e sua quota é redistribuída.
-      Desligado, a loja pode ficar com grade incompleta (ex.: só M e G).
+    - `garantir_grade_completa`: **todas** as lojas-alvo recebem ao menos 1 peça
+      de cada tamanho da curva (piso = nº de tamanhos). O piso não corta loja —
+      ele é atendido primeiro, reduzindo o rateio proporcional das demais e, se o
+      disponível não bastar, consumindo a reserva do CD (a reserva efetiva é
+      reportada em `reserva_cd` e num aviso). Desligado, a loja pode ficar com
+      grade incompleta (ex.: só M e G).
 
     A sobra não distribuível (teto/grade) é reportada como `sobra_para_cd`.
     """
@@ -262,14 +265,42 @@ def distribuir(
         avisos.append("Sem velocidades por loja: teto de cobertura não aplicado (fallback).")
 
     tamanhos_ativos = [t for t, p in (curva_tamanhos or {}).items() if p > 0]
-    # grade completa exige ao menos 1 peça de cada tamanho: a loja precisa receber,
-    # no mínimo, tantas peças quanto tamanhos — senão sai e sua quota é rateada.
-    grade_efetiva = grade_minima
-    if garantir_grade_completa and tamanhos_ativos:
-        grade_efetiva = max(grade_minima, len(tamanhos_ativos))
+    piso_loja = len(tamanhos_ativos) if (garantir_grade_completa and tamanhos_ativos) else 0
 
-    aloc = distribuir_por_participacao(disponivel, participacoes, tetos)
-    aloc = aplicar_grade_minima(aloc, grade_efetiva, participacoes)
+    if piso_loja and participacoes:
+        # O piso (1 peça de cada tamanho) é atendido PRIMEIRO, para todas as
+        # lojas-alvo; o rateio proporcional distribui apenas o que sobra dele.
+        piso_total = piso_loja * len(participacoes)
+        if disponivel < piso_total:
+            transfer = min(piso_total - disponivel, reserva)
+            reserva -= transfer
+            disponivel += transfer
+            pct_efetiva = 100 * reserva / aposta_total if aposta_total > 0 else 0
+            avisos.append(
+                f"Reserva CD cedeu {transfer:.0f} un para garantir 1 peça por tamanho "
+                f"em todas as lojas (reserva efetiva: {pct_efetiva:.0f}%)."
+            )
+        lojas_piso = list(participacoes)
+        if disponivel < piso_total:
+            # nem com a reserva dá para todas: completa a grade das maiores
+            # participações e avisa quantas ficaram de fora.
+            n_completas = int(disponivel // piso_loja)
+            lojas_piso = sorted(participacoes, key=participacoes.get, reverse=True)[:n_completas]
+            avisos.append(
+                f"Aposta insuficiente para 1 peça por tamanho em todas: "
+                f"{len(participacoes) - len(lojas_piso)} loja(s) ficaram sem grade."
+            )
+        # teto de cobertura vale para o total da loja: o extra desconta o piso
+        tetos_extra = None
+        if tetos is not None:
+            tetos_extra = {l: max(t - piso_loja, 0.0) for l, t in tetos.items()}
+        extra = distribuir_por_participacao(
+            max(disponivel - piso_loja * len(lojas_piso), 0.0), participacoes, tetos_extra)
+        aloc = {l: (piso_loja if l in lojas_piso else 0.0) + extra.get(l, 0.0)
+                for l in participacoes}
+    else:
+        aloc = distribuir_por_participacao(disponivel, participacoes, tetos)
+        aloc = aplicar_grade_minima(aloc, grade_minima, participacoes)
 
     # arredonda a distribuição por loja (maior resto sobre o total efetivamente alocado)
     total_alocado = int(floor(sum(aloc.values()) + 1e-9))

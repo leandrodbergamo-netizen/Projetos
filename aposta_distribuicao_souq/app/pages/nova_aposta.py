@@ -13,7 +13,7 @@ import pandas as pd
 import streamlit as st
 
 from app.dados_app import (contexto_lojas, opcoes, opcoes_por_relevancia,
-                           produtos_prep, vendas_fp)
+                           produtos_prep, totais_por_sku, vendas_fp)
 from core.config_utils import load_config
 from core.dados import (colecoes_projetaveis, curva_tamanhos, fim_periodo_saudavel,
                         participacao_lojas, semanas_ate)
@@ -55,7 +55,7 @@ def render() -> None:
                                    format="DD/MM/YYYY",
                                    help="Premissa dt_envio + 7 dias; posiciona a janela sazonal.")
 
-    c4, c5 = st.columns(2)
+    c4, c5, c6 = st.columns(3)
     with c4:
         opcoes_col = colecoes_projetaveis(date.today().year)
         # default = primeira coleção ainda em aberto; as já encerradas continuam
@@ -66,9 +66,13 @@ def render() -> None:
         colecao = st.selectbox("Coleção que está sendo apostada", opcoes_col, index=padrao,
                                help="Define o fim do período saudável e, com ele, o horizonte da projeção.")
     with c5:
-        reserva_pct = st.number_input("Reserva CD (%)", 0.0, 0.5,
-                                      float(cfg.get("reserva_cd_pct", 0.20)), 0.01,
-                                      help="Única premissa da aposta; o resto está em Configurações.")
+        aproveitamento = st.number_input(
+            "Aproveitamento (%)", 10, 100, int(round(100 * float(cfg.get("aproveitamento", 0.70)))), 5,
+            help="Fração da aposta que se espera vender a full price no período.") / 100.0
+    with c6:
+        reserva_pct = st.number_input(
+            "Reserva CD (%)", 0, 50, int(round(100 * float(cfg.get("reserva_cd_pct", 0.20)))), 1,
+            help="Parcela da aposta que fica no CD para reposição.") / 100.0
 
     # horizonte = da entrada até o fim saudável da coleção
     fim = fim_periodo_saudavel(colecao, cfg.get("fim_periodo_verao", "02/01"),
@@ -112,6 +116,11 @@ def render() -> None:
         + " · manga/comprimento/fit são apenas consulta. Marque os espelhos a usar."
     )
 
+    # aproveitamento realizado = unidades FP ÷ unidades vendidas em qualquer condição
+    tot = totais_por_sku()
+    cand = cand.merge(tot, on="cod_sku_pai", how="left")
+    aprov_real = (cand["unidades"] / cand["unid_total"]).clip(upper=1.0)
+
     sel_todos = st.checkbox("Selecionar todos", value=False)
     tabela = pd.DataFrame({
         "Usar": sel_todos,
@@ -119,21 +128,27 @@ def render() -> None:
         "desc_item": cand.get("desc_item"),
         "cod_sku_pai": cand["cod_sku_pai"],
         "coleção": cand.get("desc_colecao"),
+        "tecido": cand.get("grupo_material"),
         "cor": cand.get("cor_grupo"),
         "preço": cand.get("preco"),
         "manga": cand.get("desc_manga"),
         "comprimento": cand.get("desc_comprimento"),
         "fit": cand.get("desc_fit"),
         "unid_hist": cand["unidades"],
+        "aprov. real": (100 * aprov_real).round(0),
         "n_lojas": cand["n_lojas"],
         "vel/loja": cand["vel_loja_desaz"],
     })
     editado = st.data_editor(
         tabela, hide_index=True, width="stretch", key="editor_espelhos",
+        row_height=100,
         column_config={
             "Usar": st.column_config.CheckboxColumn("Usar", default=False),
-            "foto": st.column_config.ImageColumn("Foto"),
+            "foto": st.column_config.ImageColumn("Foto", width="medium"),
             "preço": st.column_config.NumberColumn("Preço", format="R$ %.0f"),
+            "aprov. real": st.column_config.NumberColumn(
+                "Aprov. real", format="%.0f%%",
+                help="Unidades vendidas a full price ÷ total vendido (todas as condições)."),
             "vel/loja": st.column_config.NumberColumn("Vel/loja", format="%.2f"),
         },
         disabled=[c for c in tabela.columns if c != "Usar"],
@@ -151,7 +166,7 @@ def render() -> None:
             return
         ap = projetar_aposta(vels, curva, pd.Timestamp(dt_entrada), ctx["n_lojas_alvo"],
                              horizonte_semanas=horizonte,
-                             aproveitamento=float(cfg.get("aproveitamento", 0.70)),
+                             aproveitamento=aproveitamento,
                              reserva_cd_pct=reserva_pct)
 
         m1, m2, m3, m4 = st.columns(4)

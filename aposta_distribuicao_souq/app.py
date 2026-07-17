@@ -15,7 +15,17 @@ PAGES = {
 
 st.sidebar.title("Aposta & Distribuição")
 st.sidebar.caption("Souq Roupa")
-selection = st.sidebar.radio("Navegação", list(PAGES.keys()))
+
+# Navegação em blocos (botões de largura cheia); o ativo fica destacado.
+if "pagina" not in st.session_state:
+    st.session_state.pagina = next(iter(PAGES))
+for nome in PAGES:
+    ativo = st.session_state.pagina == nome
+    if st.sidebar.button(nome, key=f"nav_{nome}", width="stretch",
+                         type="primary" if ativo else "secondary"):
+        st.session_state.pagina = nome
+        st.rerun()
+selection = st.session_state.pagina
 
 from app.dados_app import botao_recarregar  # noqa: E402  (após set_page_config)
 

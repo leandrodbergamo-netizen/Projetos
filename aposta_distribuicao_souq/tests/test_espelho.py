@@ -237,24 +237,36 @@ class TestJanelaFullPrice:
 
 
 class TestGradeCompleta:
-    def _distribui(self, garantir, aposta=30):
+    CURVA5 = {"PP": 1, "P": 2, "M": 2, "G": 1, "GG": 1}
+
+    def _distribui(self, garantir, aposta=30, reserva=0.0):
         from core.regra_distribuicao import distribuir
         return distribuir(aposta_total=aposta, participacoes={"L1": 0.9, "L2": 0.1},
-                          curva_tamanhos={"PP": 1, "P": 2, "M": 2, "G": 1, "GG": 1},
-                          reserva_cd_pct=0.0, max_por_tamanho_loja=None,
-                          garantir_grade_completa=garantir)
+                          curva_tamanhos=self.CURVA5, reserva_cd_pct=reserva,
+                          max_por_tamanho_loja=None, garantir_grade_completa=garantir)
 
-    def test_garantida_todo_tamanho_tem_ao_menos_1(self):
+    def test_garantida_toda_loja_recebe_1_de_cada_tamanho(self):
+        # a garantia NAO corta loja: e um piso universal. L2 (10% de 30 = 3 pecas)
+        # recebe a grade de 5 mesmo assim, reduzindo o rateio da L1.
         r = self._distribui(True)
         for loja, tams in r.matriz.items():
-            if sum(tams.values()) > 0:
-                assert all(q >= 1 for q in tams.values()), f"{loja} ficou com tamanho zerado"
+            assert sum(tams.values()) >= 5, f"{loja} nao recebeu a grade"
+            assert all(q >= 1 for q in tams.values()), f"{loja} ficou com tamanho zerado"
+        assert r.total_distribuido() == 30             # total preservado
 
-    def test_loja_pequena_demais_sai_e_a_quota_e_redistribuida(self):
-        # L2 (10%) de 30 pecas = 3 -> nao da 1 de cada um dos 5 tamanhos, entao sai
-        r = self._distribui(True)
-        assert sum(r.matriz["L2"].values()) == 0
-        assert sum(r.matriz["L1"].values()) == 30      # herdou a quota da L2
+    def test_piso_consome_a_reserva_do_cd_quando_falta(self):
+        # 2 lojas x 5 tamanhos = piso 10; disponivel = 10*(1-0.4) = 6 -> faltam 4,
+        # que saem da reserva do CD (4 de 4 disponiveis).
+        r = self._distribui(True, aposta=10, reserva=0.40)
+        assert sum(r.matriz["L1"].values()) == 5 and sum(r.matriz["L2"].values()) == 5
+        assert r.reserva_cd == pytest.approx(0.0)      # reserva efetiva reportada
+        assert any("Reserva CD cedeu" in a for a in r.avisos)
+
+    def test_aposta_insuficiente_completa_as_maiores_e_avisa(self):
+        # aposta 7 < piso 10 mesmo sem reserva: so 1 loja (a maior) leva grade
+        r = self._distribui(True, aposta=7)
+        assert sum(r.matriz["L1"].values()) >= 5
+        assert any("ficaram sem grade" in a for a in r.avisos)
 
     def test_desligada_permite_grade_incompleta(self):
         r = self._distribui(False)
