@@ -207,7 +207,7 @@ def render() -> None:
             for t in grade_sel:
                 curva_tam.setdefault(t, piso)
 
-        st.session_state["projecao"] = {
+        projecao = {
             "resumo": f"{subgrupo}/{grupo}/{tecido} · R${preco:.0f} · faixa {fx} · {colecao}",
             "aposta_total": ap.aposta_sugerida,
             "reserva_cd_pct": reserva_pct,
@@ -216,4 +216,30 @@ def render() -> None:
             "velocidades_loja": velocidade_de_cada_loja(fp, skus, curva, ctx["ecom_locs"]),
             "espelhos": skus,
         }
-        st.success("Projeção pronta. Abra a aba **Distribuição** para ver a matriz loja × tamanho.")
+        st.session_state["projecao"] = projecao
+
+        # grava o cenário no histórico (inputs + resultado + insumos da distribuição)
+        try:
+            from core import historico
+
+            historico.salvar(projecao["resumo"], {
+                **projecao,
+                "inputs": {
+                    "subgrupo": subgrupo, "grupo": grupo, "tecido": tecido,
+                    "cores": cores, "grade": grade_sel, "preco": preco,
+                    "dt_entrada": str(dt_entrada), "colecao": colecao,
+                    "aproveitamento": aproveitamento, "horizonte_semanas": horizonte,
+                    "faixa": fx,
+                },
+                "resultado": {
+                    "venda_projetada": ap.venda_projetada, "venda_ecom": ap.venda_ecom,
+                    "aposta_sugerida": ap.aposta_sugerida, "reserva_cd": ap.reserva_cd,
+                    "semanas_equivalentes": ap.semanas_equivalentes,
+                    "vel_por_loja_desaz": ap.vel_por_loja_desaz,
+                },
+            })
+            salvo = " Cenário salvo no Histórico."
+        except Exception:
+            salvo = " (não foi possível salvar no Histórico.)"
+        st.success("Projeção pronta. Abra a aba **Distribuição** para ver a matriz "
+                   "loja × tamanho." + salvo)
