@@ -118,7 +118,10 @@ def _ler_arq(caminho: Path) -> list[dict]:
 
 
 def _listar_arq(limite: int, caminho: Path) -> pd.DataFrame:
-    linhas = sorted(_ler_arq(caminho), key=lambda x: x.get("criado_em", ""), reverse=True)
+    # inverte antes de ordenar: em empate de criado_em (relógio com tick de ~15ms
+    # no Windows), a ordenação estável mantém o gravado por último em primeiro
+    linhas = sorted(reversed(_ler_arq(caminho)),
+                    key=lambda x: x.get("criado_em", ""), reverse=True)
     df = pd.DataFrame(linhas[:limite], columns=["id", "criado_em", "resumo", "payload"])
     if not df.empty:
         df["criado_em"] = pd.to_datetime(df["criado_em"], errors="coerce")

@@ -3,7 +3,7 @@
 Fluxo:
 1. `preparar_produtos` enriquece o cadastro (tecido/cor/faixa).
 2. `candidatos_espelho` lista produtos comparáveis (match sem data; hard =
-   subgrupo+grupo+faixa+tecido; soft relaxável = cor/manga/comprimento/fit).
+   subgrupo+faixa+tecido+grade; soft relaxável = cor).
 3. `velocidade_por_loja_desaz` mede a velocidade do espelho **nas mesmas lojas**
    e desazonaliza pela janela em que ele vendeu.
 4. `projetar_aposta` extrapola a velocidade por-loja para o parque-alvo, re-
@@ -27,12 +27,9 @@ from core.taxonomia import (agrupar_cor, agrupar_material, agrupar_tamanho,
 # delas sobre a velocidade é ~0 (ver docs/relevancia_variaveis.md).
 COLS_EXIBE = [
     "url", "desc_item", "cod_produto", "cod_sku_pai", "desc_colecao",
-    "grupo_material", "desc_cor", "cor_grupo", "faixa", "preco",
+    "grupo_material", "desc_cor", "cor_grupo", "faixa", "preco", "dt_envio",
     "desc_manga", "desc_comprimento", "desc_fit",
 ]
-# Filtros afrouxáveis (a cor solta primeiro; a grade, por último): cor é a
-# variável mais preditiva (eta² 0,09); grade garante que a curva de tamanhos do
-# espelho informe todos os tamanhos da aposta.
 
 
 # --------------------------------------------------------------------------- #
@@ -99,7 +96,7 @@ def candidatos_espelho(
     produtos_prep: pd.DataFrame,
     *,
     subgrupo: str,
-    grupo: str,
+    grupo: Optional[str] = None,
     faixa: Optional[str] = None,
     tecido: Optional[str] = None,
     cor_grupo=None,
@@ -110,39 +107,43 @@ def candidatos_espelho(
 ) -> tuple[pd.DataFrame, list[str]]:
     """Retorna (candidatos, filtros_soft_aplicados).
 
-    Hard: subgrupo + grupo + faixa + tecido + coleção >= desde. Coleção fora do
+    Hard: subgrupo + faixa + tecido + grade + coleção >= desde. Coleção fora do
     escopo (PERENE/ALTO VERÃO/CANCELADO) tem rank NaN e cai fora sozinha.
-    Soft (afrouxados nesta ordem se faltar candidato): cor, depois grade.
+    - `grupo` (construção) é opcional: o tecido já separa Tricot/Jeans/planos,
+      então a aba de aposta não pergunta mais a construção ao usuário.
+    - `grade`: buckets de tamanho da aposta (ex.: {"38|PP",...,"46|GG"}). É
+      FILTRO fixo: o espelho precisa ter vendido TODOS os tamanhos da grade
+      (grade dele ⊇ alvo) — senão a curva dele não informa os tamanhos que
+      faltam. Como a grade numerária é unificada (36–46 ≡ XPP–GG), os dois
+      formatos casam.
+    Soft (afrouxado se faltar candidato): só a cor.
     - `cor_grupo`: uma cor ou lista (vazio/None = todas).
-    - `grade`: buckets de tamanho da aposta (ex.: {"38|PP",...,"46|GG"}). O
-      espelho precisa ter vendido TODOS os tamanhos da grade (grade dele ⊇ alvo)
-      — senão a curva dele não informa os tamanhos que faltam. Como a grade
-      numerária é unificada (36–46 ≡ XPP–GG), os dois formatos casam.
     Manga/comprimento/fit NÃO filtram — vão na tabela como consulta.
     Data NÃO é critério (só posiciona a janela sazonal).
     """
     df = produtos_prep
-    hard = (df["desc_sub_grupo_wbg"] == subgrupo) & (df["desc_grupo_wgb"] == grupo)
+    hard = df["desc_sub_grupo_wbg"] == subgrupo
+    if grupo is not None:
+        hard &= df["desc_grupo_wgb"] == grupo
     hard &= df["rank_colecao"] >= desde_colecao
     if faixa is not None:
         hard &= df["faixa"] == faixa
     if tecido is not None:
         hard &= df["grupo_material"] == tecido
     base = df[hard]
+    if grade and "tamanho_grupo" in base.columns:
+        alvo = set(grade)
+        grades = grades_por_modelo(base)
+        base = base[base["cod_sku_pai"].map(lambda s: alvo <= grades.get(s, set()))]
 
     if isinstance(cor_grupo, str):
         cor_grupo = [cor_grupo]
     cores = list(cor_grupo) if cor_grupo else None
-    alvo = set(grade) if grade else None
 
     # filtros soft como máscaras nomeadas; o primeiro da lista afrouxa primeiro
     softs: list[tuple[str, pd.Series]] = []
     if cores:
         softs.append(("cor_grupo", base["cor_grupo"].isin(cores)))
-    if alvo and "tamanho_grupo" in base.columns:
-        grades = grades_por_modelo(base)
-        cobre = base["cod_sku_pai"].map(lambda s: alvo <= grades.get(s, set()))
-        softs.append(("grade", cobre))
 
     usados = [nome for nome, _ in softs]
 
@@ -168,6 +169,29 @@ def grades_por_modelo(produtos_prep: pd.DataFrame) -> dict:
         return {}
     g = produtos_prep.dropna(subset=["tamanho_grupo"]).groupby("cod_sku_pai")["tamanho_grupo"]
     return g.apply(set).to_dict()
+
+
+def pool_suavizacao(
+    produtos_prep: pd.DataFrame,
+    *,
+    subgrupo: str,
+    tecido: str,
+    fits=None,
+    desde_colecao: float = 2022.0,
+) -> set:
+    """Modelos do mesmo subgrupo + tecido (+ fit) para suavizar a curva de lojas.
+
+    A participação por loja calculada só com os espelhos escolhidos é ruidosa
+    (poucos modelos); a do segmento inteiro é estável. `fits` restringe aos fits
+    dos espelhos (None = todos). A aposta e a curva de tamanhos seguem vindo só
+    dos espelhos — o pool alimenta apenas o rateio entre lojas.
+    """
+    df = produtos_prep
+    m = (df["desc_sub_grupo_wbg"] == subgrupo) & (df["grupo_material"] == tecido)
+    m &= df["rank_colecao"] >= desde_colecao
+    if fits and "desc_fit" in df.columns:
+        m &= df["desc_fit"].isin(list(fits))
+    return set(df.loc[m, "cod_sku_pai"])
 
 
 def janelas_full_price(produtos_prep: pd.DataFrame) -> dict:

@@ -18,18 +18,28 @@ from core.config_utils import load_config
 from core.dados import (colecoes_projetaveis, curva_tamanhos, fim_periodo_saudavel,
                         participacao_lojas, semanas_ate)
 from core.espelho import (candidatos_espelho, enriquecer_velocidade, grades_por_modelo,
-                          janelas_full_price, projetar_aposta, velocidade_de_cada_loja,
-                          velocidade_por_loja_desaz)
+                          janelas_full_price, pool_suavizacao, projetar_aposta,
+                          velocidade_de_cada_loja, velocidade_por_loja_desaz)
 from core.regra_distribuicao import participacao_com_loja_nova
 from core.sazonalidade import curva_por
 from core.taxonomia import faixa_preco, ordem_tamanhos, rotulo_grade
-
-GRUPOS = ["TECIDO PLANO", "MALHA", "TRICOT", "JEANS"]
 
 
 def _foto(url):
     u = str(url) if url is not None else ""
     return u if u.lower().endswith((".jpg", ".jpeg", ".png", ".webp")) else None
+
+
+def _grupo_predominante(pp, subgrupo, tecido, desde=2022.0):
+    """Construção (grupo) mais comum do subgrupo+tecido no escopo.
+
+    A faixa de preço oficial é por grupo+subgrupo, mas a aba não pergunta mais a
+    construção ao usuário — o tecido já carrega essa informação.
+    """
+    esc = pp[(pp["desc_sub_grupo_wbg"] == subgrupo) & (pp["rank_colecao"] >= desde)]
+    com_tecido = esc[esc["grupo_material"] == tecido]
+    serie = (com_tecido if len(com_tecido) else esc)["desc_grupo_wgb"].dropna()
+    return serie.mode().iat[0] if len(serie) else "TECIDO PLANO"
 
 
 def render() -> None:
@@ -44,7 +54,9 @@ def render() -> None:
     c1, c2, c3 = st.columns(3)
     with c1:
         subgrupo = st.selectbox("Subgrupo", opcoes("desc_sub_grupo_wbg"))
-        grupo = st.selectbox("Grupo (construção)", GRUPOS)
+        sku_ref = st.text_input(
+            "SKU pai / estilo (opcional)",
+            help="Referência livre do produto novo — identifica o cenário no Histórico.").strip()
     with c2:
         tecido = st.selectbox("Tecido (matéria-prima)", opcoes_por_relevancia("grupo_material"))
         cores = st.multiselect("Cor", opcoes("cor_grupo"),
@@ -78,15 +90,18 @@ def render() -> None:
     grade_padrao = [t for t in todos_tam if t in {"38|PP", "40|P", "42|M", "44|G", "46|GG"}]
     grade_sel = st.multiselect(
         "Grade de tamanhos da aposta", todos_tam, default=grade_padrao,
-        help="Tamanhos que o produto novo vai ter. Letra e numeração são equivalentes "
-             "(36≡XPP, 38≡PP, 40≡P, 42≡M, 44≡G, 46≡GG); o espelho precisa ter vendido "
-             "todos os tamanhos da grade.")
+        help="Filtro: só entram como espelho os modelos que venderam TODOS os tamanhos "
+             "da grade. Letra e numeração são equivalentes (36≡XPP, 38≡PP, 40≡P, 42≡M, "
+             "44≡G, 46≡GG). A grade também define as colunas da matriz de distribuição.")
 
     # horizonte = da entrada até o fim saudável da coleção
     fim = fim_periodo_saudavel(colecao, cfg.get("fim_periodo_verao", "02/01"),
                                cfg.get("fim_periodo_inverno", "14/06"))
     horizonte = semanas_ate(dt_entrada, fim)
-    faixa_info = faixa_preco(grupo, subgrupo, preco)
+    desde = float(cfg.get("desde_colecao", 2022.0))
+    # a construção (grupo) saiu da tela: inferida do subgrupo+tecido só para a faixa
+    grupo_faixa = _grupo_predominante(pp, subgrupo, tecido, desde=desde)
+    faixa_info = faixa_preco(grupo_faixa, subgrupo, preco)
     fx = faixa_info["faixa"]
     ctx = contexto_lojas()
 
@@ -97,13 +112,14 @@ def render() -> None:
 
     # -------------------------------------------------------------- candidatos
     cand, soft = candidatos_espelho(
-        pp, subgrupo=subgrupo, grupo=grupo, faixa=fx, tecido=tecido,
+        pp, subgrupo=subgrupo, faixa=fx, tecido=tecido,
         cor_grupo=cores or None, grade=grade_sel or None,
-        desde_colecao=float(cfg.get("desde_colecao", 2022.0)),
+        desde_colecao=desde,
     )
     curva, nivel = curva_por(fp, subgrupo=subgrupo, material=tecido)
     if cand.empty:
-        st.warning("Nenhum candidato a espelho com esses filtros. Afrouxe a cor/tecido ou ajuste o preço.")
+        st.warning("Nenhum candidato a espelho com esses filtros. Reduza a grade de "
+                   "tamanhos, afrouxe a cor ou ajuste o preço.")
         return
 
     total_bruto = len(cand)
@@ -122,7 +138,7 @@ def render() -> None:
     filtros = []
     filtros.append("cor mantida" if "cor_grupo" in soft else ("cor afrouxada" if cores else "sem filtro de cor"))
     if grade_sel:
-        filtros.append("grade mantida" if "grade" in soft else "grade afrouxada (poucos candidatos)")
+        filtros.append(f"só espelhos que venderam a grade {rotulo_grade(set(grade_sel))}")
     st.caption(
         " · ".join(filtros).capitalize()
         + (f" · {ocultos} sem histórico de venda ocultado(s)" if ocultos else "")
@@ -142,6 +158,7 @@ def render() -> None:
         "desc_item": cand.get("desc_item"),
         "cod_sku_pai": cand["cod_sku_pai"],
         "coleção": cand.get("desc_colecao"),
+        "envio": cand.get("dt_envio"),
         "tecido": cand.get("grupo_material"),
         "grade": cand["cod_sku_pai"].map(lambda s: rotulo_grade(grades.get(s))),
         "cor": cand.get("cor_grupo"),
@@ -160,6 +177,7 @@ def render() -> None:
         column_config={
             "Usar": st.column_config.CheckboxColumn("Usar", default=False),
             "foto": st.column_config.ImageColumn("Foto", width="medium"),
+            "envio": st.column_config.DateColumn("Envio", format="DD/MM/YYYY"),
             "preço": st.column_config.NumberColumn("Preço", format="R$ %.0f"),
             "aprov. real": st.column_config.NumberColumn(
                 "Aprov. real", format="%.0f%%",
@@ -195,7 +213,21 @@ def render() -> None:
         # insumos da distribuição: participação (com loja nova) + curva de tamanhos
         # + velocidade de cada loja (alimenta o teto de cobertura)
         skus = [v.cod_sku_pai for v in vels]
-        fp_esp_fisico = fp[fp["cod_sku_pai"].isin(skus) & ~fp["sk_localidade"].isin(ctx["ecom_locs"])]
+        fisico = ~fp["sk_localidade"].isin(ctx["ecom_locs"])
+        fp_esp_fisico = fp[fp["cod_sku_pai"].isin(skus) & fisico]
+        # participação por loja suavizada: todos os modelos do segmento
+        # subgrupo+tecido+fit (fits dos espelhos escolhidos). Poucos espelhos dão
+        # uma curva de loja ruidosa; o segmento inteiro é estável. A aposta e a
+        # curva de tamanhos seguem vindo só dos espelhos.
+        fits = sorted(set(cand.loc[cand["cod_sku_pai"].isin(skus), "desc_fit"].dropna())
+                      if "desc_fit" in cand.columns else set())
+        pool = pool_suavizacao(pp, subgrupo=subgrupo, tecido=tecido,
+                               fits=fits or None, desde_colecao=desde)
+        fp_pool_fisico = fp[fp["cod_sku_pai"].isin(pool) & fisico]
+        participacoes = participacao_lojas(fp_pool_fisico) or participacao_lojas(fp_esp_fisico)
+        n_pool = int(fp_pool_fisico["cod_sku_pai"].nunique())
+        st.caption(f"Participação por loja suavizada com **{n_pool} modelos** do segmento "
+                   f"{subgrupo}/{tecido}" + (f" (fit: {', '.join(fits)})" if fits else "") + ".")
         # curva por bucket unificado (36≡XPP...), restrita à grade da aposta.
         # Tamanho da grade sem venda nos espelhos entra com peso mínimo para não
         # ficar de fora da matriz (a grade foi decisão de compra).
@@ -207,14 +239,16 @@ def render() -> None:
             for t in grade_sel:
                 curva_tam.setdefault(t, piso)
 
+        ref = f"{sku_ref} · " if sku_ref else ""
         projecao = {
-            "resumo": f"{subgrupo}/{grupo}/{tecido} · R${preco:.0f} · faixa {fx} · {colecao}",
+            "resumo": f"{ref}{subgrupo}/{tecido} · R${preco:.0f} · faixa {fx} · {colecao}",
             "aposta_total": ap.aposta_sugerida,
             "reserva_cd_pct": reserva_pct,
-            "participacoes_hist": participacao_lojas(fp_esp_fisico),
+            "participacoes_hist": participacoes,
             "curva_tamanhos": curva_tam,
             "velocidades_loja": velocidade_de_cada_loja(fp, skus, curva, ctx["ecom_locs"]),
             "espelhos": skus,
+            "suavizacao": {"n_modelos": n_pool, "fits": fits},
         }
         st.session_state["projecao"] = projecao
 
@@ -225,11 +259,11 @@ def render() -> None:
             historico.salvar(projecao["resumo"], {
                 **projecao,
                 "inputs": {
-                    "subgrupo": subgrupo, "grupo": grupo, "tecido": tecido,
+                    "sku_ref": sku_ref, "subgrupo": subgrupo, "tecido": tecido,
                     "cores": cores, "grade": grade_sel, "preco": preco,
                     "dt_entrada": str(dt_entrada), "colecao": colecao,
                     "aproveitamento": aproveitamento, "horizonte_semanas": horizonte,
-                    "faixa": fx,
+                    "faixa": fx, "grupo_faixa": grupo_faixa,
                 },
                 "resultado": {
                     "venda_projetada": ap.venda_projetada, "venda_ecom": ap.venda_ecom,

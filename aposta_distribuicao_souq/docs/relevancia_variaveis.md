@@ -41,8 +41,15 @@ O próprio subgrupo, medido entre subgrupos, dá eta² = 0,07.
   (0,13); **CAMISA** é o único subgrupo em que manga importa (0,11).
 
 ## Decisão de desenho (match de espelho)
-- **Filtro rígido:** subgrupo + grupo (construção) + faixa de preço + tecido.
+- **Filtro rígido:** subgrupo + faixa de preço + tecido + grade de tamanhos (o
+  espelho precisa ter vendido todos os tamanhos da grade da aposta).
+- **Grupo (construção) saiu da tela** por decisão do negócio: o tecido já separa
+  Tricot/Jeans/planos. Ele é inferido (moda do subgrupo+tecido) só para achar a
+  faixa de preço oficial, que é tabelada por grupo+subgrupo.
 - **Filtro afrouxável:** cor — solta automaticamente se sobrarem poucos candidatos.
+- **Participação por loja é suavizada** com todos os modelos do segmento
+  subgrupo+tecido+fit (fits dos espelhos escolhidos); a aposta e a curva de
+  tamanhos seguem vindo só dos espelhos.
 - **Apenas consulta (não filtram):** manga, comprimento, fit — aparecem como colunas
   na tabela de candidatos para o comprador bater o olho ao escolher o espelho.
 - **Data não entra no match** — serve só para posicionar a janela sazonal.

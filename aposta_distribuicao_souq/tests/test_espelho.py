@@ -2,7 +2,8 @@ import pandas as pd
 import pytest
 
 from core.dados import filtrar_colecoes, rank_colecao
-from core.espelho import candidatos_espelho, projetar_aposta, velocidade_por_loja_desaz
+from core.espelho import (candidatos_espelho, pool_suavizacao, projetar_aposta,
+                          velocidade_por_loja_desaz)
 from core.regra_distribuicao import participacao_com_loja_nova
 
 CURVA_NEUTRA = pd.DataFrame({"semana": list(range(1, 54)), "indice": [100.0] * 53})
@@ -104,9 +105,11 @@ class TestCandidatosEspelho:
                                         faixa="P1", tecido="Linho", grade=alvo,
                                         min_candidatos=1)
         assert sorted(cand["cod_sku_pai"].unique()) == ["A", "C"]   # B não cobre PP/GG
-        assert "grade" in soft
+        assert soft == []   # grade é hard, não aparece na lista de softs
 
-    def test_grade_afrouxa_se_nao_sobrar_candidato(self):
+    def test_grade_e_filtro_fixo_nao_afrouxa(self):
+        # pedido do negócio: a grade FILTRA os produtos que compõem a distribuição.
+        # Sem espelho que cubra a grade, o resultado é vazio (nunca afrouxa).
         def linhas(sku, tams):
             return [{"cod_sku_pai": sku, "desc_sub_grupo_wbg": "VESTIDO",
                      "desc_grupo_wgb": "TECIDO PLANO", "faixa": "P1",
@@ -121,8 +124,21 @@ class TestCandidatosEspelho:
                                         faixa="P1", tecido="Linho",
                                         grade=["38|PP", "40|P", "42|M", "44|G", "46|GG"],
                                         min_candidatos=1)
-        assert cand["cod_sku_pai"].tolist() == ["B"]    # afrouxou em vez de zerar
-        assert soft == []
+        assert cand.empty and soft == []
+
+    def test_grupo_construcao_e_opcional(self):
+        # a aba de aposta não pergunta mais a construção: sem `grupo`, modelos de
+        # construções diferentes (mesmo tecido) são todos candidatos.
+        cat = _catalogo([("A", "Azul", None, "INVERNO 2023"),
+                         ("B", "Azul", None, "INVERNO 2023")])
+        cat.loc[cat["cod_sku_pai"] == "B", "desc_grupo_wgb"] = "MALHA"
+        cand, _ = candidatos_espelho(cat, subgrupo="VESTIDO", faixa="P1",
+                                     tecido="Linho", cor_grupo="Azul")
+        assert sorted(cand["cod_sku_pai"]) == ["A", "B"]
+        # informando o grupo, ele volta a filtrar
+        cand, _ = candidatos_espelho(cat, subgrupo="VESTIDO", grupo="MALHA",
+                                     faixa="P1", tecido="Linho", cor_grupo="Azul")
+        assert cand["cod_sku_pai"].tolist() == ["B"]
 
     def test_colecao_fora_do_escopo_nao_vira_candidato(self):
         cat = _catalogo([("A", "Azul", "MANGA LONGA", "INVERNO 2023"),
@@ -133,6 +149,28 @@ class TestCandidatosEspelho:
                                      faixa="P1", tecido="Linho", cor_grupo="Azul",
                                      min_candidatos=1)
         assert cand["cod_sku_pai"].tolist() == ["A"]
+
+
+class TestPoolSuavizacao:
+    def test_mesmo_subgrupo_tecido_e_escopo(self):
+        cat = _catalogo([("A", "Azul", None, "INVERNO 2023"),
+                         ("B", "Preto", None, "INVERNO 2023"),      # cor diferente entra
+                         ("V", "Azul", None, "INVERNO 2019")])      # fora do escopo sai
+        cat.loc[cat["cod_sku_pai"] == "B", "grupo_material"] = "Linho"
+        outro = _catalogo([("T", "Azul", None, "INVERNO 2023")])
+        outro["grupo_material"] = "Tricot"
+        import pandas as pd
+        pool = pool_suavizacao(pd.concat([cat, outro]), subgrupo="VESTIDO", tecido="Linho")
+        assert pool == {"A", "B"}
+
+    def test_fit_restringe_quando_informado(self):
+        cat = _catalogo([("A", "Azul", None, "INVERNO 2023"),
+                         ("B", "Azul", None, "INVERNO 2023")])
+        cat.loc[cat["cod_sku_pai"] == "B", "desc_fit"] = "AMPLO"
+        pool = pool_suavizacao(cat, subgrupo="VESTIDO", tecido="Linho", fits=["RETO"])
+        assert pool == {"A"}
+        pool = pool_suavizacao(cat, subgrupo="VESTIDO", tecido="Linho", fits=None)
+        assert pool == {"A", "B"}
 
 
 class TestVelocidadeEspelho:
