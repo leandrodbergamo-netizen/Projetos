@@ -76,10 +76,15 @@ def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
     # Clusterização x ruptura: a loja precisa JÁ carregar o SKU pai, ou seja,
     # ter estoque de pelo menos um outro SKU filho do mesmo pai. Se nunca
     # recebeu nenhum filho do pai, é clusterização (não é ruptura).
+    # Exceção: pai de FILHO ÚNICO (Home/Acessórios, sem grade) não tem "outro
+    # filho" possível — a evidência de que a loja trabalha o produto é a venda
+    # do pai na janela, já exigida no início do funil (venda_pai > 0).
     el_pai = estoque_loja.merge(produtos[["sku_filho", "sku_pai"]], on="sku_filho", how="left")
     carrega_pai = set(zip(el_pai["loja"], el_pai["sku_pai"]))
-    chaves_pai = list(zip(cand["loja"], cand["sku_pai"]))
-    cand = cand[[c in carrega_pai for c in chaves_pai]]
+    n_filhos = produtos.groupby("sku_pai")["sku_filho"].nunique()
+    filho_unico = set(n_filhos[n_filhos == 1].index)
+    cand = cand[[p in filho_unico or (l, p) in carrega_pai
+                 for l, p in zip(cand["loja"], cand["sku_pai"])]]
 
     # CD não pode ter o filho.
     cd_com_estoque = set(estoque_cd.loc[estoque_cd["qtd"] > 0, "sku_filho"])
