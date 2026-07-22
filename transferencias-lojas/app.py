@@ -107,11 +107,6 @@ div[data-testid="stVerticalBlockBorderWrapper"] {{
 .panel-titulo {{ font-size: 15px; font-weight: 600; color: {COR["texto"]}; }}
 .panel-nota {{ font-size: 11.5px; color: {COR["texto3"]}; text-align: right; padding-top: 2px; }}
 
-/* Cabeçalhos de tabela do st.dataframe */
-[data-testid="stDataFrame"] thead th {{
-    background: {COR["cab_tabela"]}; color: {COR["texto2"]};
-    font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
-}}
 </style>""", unsafe_allow_html=True)
 
 
@@ -359,7 +354,7 @@ with tab_sug:
         csv = (exib.rename(columns=SUG_RENOME)
                .to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"))
         c_csv.download_button("Exportar CSV", data=csv, file_name="sugestoes.csv",
-                              mime="text/csv", use_container_width=True)
+                              mime="text/csv", use_container_width=True, type="primary")
 
         st.dataframe(sty, use_container_width=True, hide_index=True, height=390)
         st.caption("Limites por SKU filho: Home até 10 · Acessórios até 4 · Roupa até 2 — "
@@ -401,15 +396,15 @@ with tab_rup:
         card(m3, "% Sold out CD", _pct(p_cd), "sem reposição disponível no CD")
         st.write("")
 
-        g_rank, g_carga = st.columns([3, 2])
-        with g_rank, st.container(border=True):
+        with st.container(border=True):
             t1, t2 = st.columns([3, 1])
             t1.markdown('<div class="panel-titulo">Ranking de lojas por % de ruptura</div>',
                         unsafe_allow_html=True)
             t2.markdown('<div class="panel-nota">maior → menor</div>', unsafe_allow_html=True)
 
-            por_loja = engine.ruptura_por_loja(rf)
-            d = por_loja.copy()
+            # Pré-ordenado no DataFrame (sort=None preserva a ordem no gráfico).
+            d = (engine.ruptura_por_loja(rf)
+                 .sort_values("%Ruptura Loja", ascending=False).reset_index(drop=True))
             d["loja_curta"] = d["loja"].astype(str).str.replace(_SEM_SOUQ, "", regex=True)
             rot_acima = f"Acima da média ({_pct(p_loja)})"
             d["situacao"] = d["%Ruptura Loja"].gt(p_loja).map(
@@ -417,8 +412,7 @@ with tab_rup:
             d["rotulo"] = d["%Ruptura Loja"].map(_pct)
 
             base = alt.Chart(d).encode(
-                y=alt.Y("loja_curta:N", title=None,
-                        sort=alt.EncodingSortField(field="%Ruptura Loja", order="descending"),
+                y=alt.Y("loja_curta:N", title=None, sort=None,
                         axis=alt.Axis(labelLimit=220)))
             barras = base.mark_bar(size=13, cornerRadiusEnd=2).encode(
                 x=alt.X("%Ruptura Loja:Q", axis=None,
@@ -434,19 +428,6 @@ with tab_rup:
             st.altair_chart(_estilo_barras((barras + rotulos).properties(
                 height=26 * max(len(d), 1) + 46)), use_container_width=True)
 
-        with g_carga, st.container(border=True):
-            st.markdown('<div class="panel-titulo">Carga por loja doadora</div>',
-                        unsafe_allow_html=True)
-            if sug.empty:
-                st.caption("Sem sugestões na rodada atual.")
-            else:
-                resumo = (sug.groupby("loja_doadora")
-                          .agg(lojas=("loja_receptora", "nunique"), pecas=("qtd", "sum"))
-                          .reset_index().sort_values("pecas", ascending=False)
-                          .rename(columns={"loja_doadora": "Loja doadora",
-                                           "lojas": "Lojas atendidas", "pecas": "Peças"}))
-                st.dataframe(resumo, use_container_width=True, hide_index=True, height=420)
-
         st.write("")
         with st.container(border=True):
             st.markdown('<div class="panel-titulo">Ruptura por subgrupo</div>',
@@ -461,12 +442,11 @@ with tab_rup:
             if por_sub.empty:
                 st.caption("Sem ruptura nos subgrupos do filtro atual.")
             else:
-                ds = por_sub.copy()
+                ds = por_sub.sort_values("%Ruptura Loja", ascending=False).copy()
                 ds["nome"] = ds["subgrupo"].astype(str).str.title()
                 ds["rotulo"] = ds["%Ruptura Loja"].map(_pct)
                 base_s = alt.Chart(ds).encode(
-                    y=alt.Y("nome:N", title=None,
-                            sort=alt.EncodingSortField(field="%Ruptura Loja", order="descending"),
+                    y=alt.Y("nome:N", title=None, sort=None,
                             axis=alt.Axis(labelLimit=220)))
                 barras_s = base_s.mark_bar(size=12, cornerRadiusEnd=2,
                                            color=COR["barra"]).encode(

@@ -5,3 +5,6 @@ backgroundColor = "#F4F3F0"
 secondaryBackgroundColor = "#FFFFFF"
 textColor = "#1C1E21"
 font = "sans serif"
+# Tabelas (st.dataframe é canvas: cabeçalho só estiliza via tema).
+dataframeHeaderBackgroundColor = "#DCE9E4"
+dataframeBorderColor = "#E4E2DD"

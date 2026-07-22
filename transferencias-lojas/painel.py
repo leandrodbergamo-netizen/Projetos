@@ -133,18 +133,24 @@ def html_painel(dados, hoje: date, janela_dias: int = config.JANELA_VENDAS_DIAS,
     .ve thead th{{position:sticky;top:0;background:#FAFAF8;color:#6B7075;font-size:10px;
         font-weight:600;text-transform:uppercase;letter-spacing:.05em;z-index:2;
         max-width:96px;white-space:normal;line-height:1.3;border-bottom:1px solid #E4E2DD}}
-    .ve th.prod,.ve td.prod{{position:sticky;left:0;background:#fff;text-align:left;
-        min-width:215px;max-width:240px;z-index:1;border-right:1px solid #E4E2DD}}
-    .ve thead th.prod{{z-index:3;background:#FAFAF8}}
+    .ve th.pfoto,.ve td.pfoto{{position:sticky;left:0;background:#fff;width:64px;
+        min-width:64px;max-width:64px;z-index:1}}
+    .ve th.pinfo,.ve td.pinfo{{position:sticky;left:64px;background:#fff;text-align:left;
+        min-width:185px;max-width:210px;z-index:1;border-right:1px solid #E4E2DD}}
+    .ve thead th.pfoto,.ve thead th.pinfo{{z-index:3;background:#FAFAF8}}
     .ve td{{position:relative;height:52px}}
     .ve .qlf{{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}}
     .ve .stk{{font-size:10px;color:#6B7075;font-variant-numeric:tabular-nums}}
     .ve .dot{{position:absolute;top:5px;right:6px;width:6px;height:6px;border-radius:50%;
         background:#B04A3A}}
-    .ve .pcel{{display:flex;gap:9px;align-items:center}}
     .ve img,.ve .noimg{{width:40px;height:40px;border-radius:6px;object-fit:cover;
-        flex:0 0 40px;display:block}}
+        display:block;margin:0 auto}}
     .ve .noimg{{background:#ECEAE5}}
+    .ve td.pfoto a{{display:block;width:40px;height:40px;margin:0 auto}}
+    .ve td.pfoto img{{cursor:zoom-in;transition:transform .15s ease;
+        transform-origin:left center}}
+    .ve td.pfoto img:hover{{transform:scale(3.4);position:relative;z-index:60;
+        border-radius:4px;box-shadow:0 6px 20px rgba(0,0,0,.3)}}
     .ve .pnome{{font-weight:500;line-height:1.3}}
     .ve .psku{{font:10px 'IBM Plex Mono',monospace;color:#9A9E9C}}
     </style>
@@ -158,7 +164,8 @@ def html_painel(dados, hoje: date, janela_dias: int = config.JANELA_VENDAS_DIAS,
 
     out = [css, leg, '<div class="ve-wrap"><table class="ve">']
     cab = "".join(f"<th>{_html.escape(_SEM_SOUQ.sub('', str(l)))}</th>" for l in lojas)
-    out.append(f"<thead><tr><th class='prod'>Produto</th>{cab}</tr></thead><tbody>")
+    out.append("<thead><tr><th class='pfoto'>Foto</th><th class='pinfo'>Produto</th>"
+               f"{cab}</tr></thead><tbody>")
 
     for pai in mat_v.index:
         url = foto.get(pai)
@@ -167,12 +174,17 @@ def html_painel(dados, hoje: date, janela_dias: int = config.JANELA_VENDAS_DIAS,
                 url = config.URL_FOTO_TEMPLATE.format(sku_pai=pai, sku_filho="")
             except Exception:
                 url = None
-        img = (f"<img src='{_html.escape(str(url))}' loading='lazy'/>"
-               if url and str(url) != "nan" else "<span class='noimg'></span>")
+        if url and str(url) != "nan":
+            u = _html.escape(str(url))
+            # Hover aproxima; clique abre a imagem original em nova guia.
+            img = (f"<a href='{u}' target='_blank' rel='noopener' "
+                   f"title='Clique para ampliar'><img src='{u}' loading='lazy'/></a>")
+        else:
+            img = "<span class='noimg'></span>"
         nome = _html.escape(str(desc.get(pai, "")).title())
-        cels = [f"<td class='prod'><div class='pcel'>{img}"
-                f"<div><div class='pnome'>{nome}</div>"
-                f"<div class='psku'>{_html.escape(str(pai))}</div></div></div></td>"]
+        cels = [f"<td class='pfoto'>{img}</td>",
+                f"<td class='pinfo'><div class='pnome'>{nome}</div>"
+                f"<div class='psku'>{_html.escape(str(pai))}</div></td>"]
         for l in lojas:
             v = int(mat_v.at[pai, l]); e = int(mat_e.at[pai, l])
             dd = dias.at[pai, l]
