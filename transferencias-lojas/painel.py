@@ -130,14 +130,14 @@ def html_painel(dados, hoje: date, janela_dias: int = config.JANELA_VENDAS_DIAS,
         color:#1C1E21;min-width:100%}}
     .ve th,.ve td{{border-bottom:1px solid #EDECE8;padding:5px 8px;text-align:center;
         vertical-align:middle}}
-    .ve thead th{{position:sticky;top:0;background:#FAFAF8;color:#6B7075;font-size:10px;
+    .ve thead th{{position:sticky;top:0;background:#1E3A5F;color:#FFFFFF;font-size:10px;
         font-weight:600;text-transform:uppercase;letter-spacing:.05em;z-index:2;
         max-width:96px;white-space:normal;line-height:1.3;border-bottom:1px solid #E4E2DD}}
     .ve th.pfoto,.ve td.pfoto{{position:sticky;left:0;background:#fff;width:64px;
         min-width:64px;max-width:64px;z-index:1}}
     .ve th.pinfo,.ve td.pinfo{{position:sticky;left:64px;background:#fff;text-align:left;
         min-width:185px;max-width:210px;z-index:1;border-right:1px solid #E4E2DD}}
-    .ve thead th.pfoto,.ve thead th.pinfo{{z-index:3;background:#FAFAF8}}
+    .ve thead th.pfoto,.ve thead th.pinfo{{z-index:3;background:#1E3A5F;color:#FFFFFF}}
     .ve td{{position:relative;height:52px}}
     .ve .qlf{{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}}
     .ve .stk{{font-size:10px;color:#6B7075;font-variant-numeric:tabular-nums}}

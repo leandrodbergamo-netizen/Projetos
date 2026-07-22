@@ -6,6 +6,7 @@ A lógica de negócio (engine/cobertura/sazonalidade) não muda aqui.
 """
 from __future__ import annotations
 
+import html as _html
 import io
 import re as _re
 
@@ -24,7 +25,7 @@ COR = {
     "fundo": "#F4F3F0", "superficie": "#FFFFFF", "borda": "#E4E2DD",
     "texto": "#1C1E21", "texto2": "#6B7075", "texto3": "#9A9E9C",
     "acento": "#17635A", "alerta": "#B04A3A", "barra": "#3E6B65",
-    "header": "#1C2B29", "cab_tabela": "#FAFAF8",
+    "header": "#1C2B29", "cab_tabela": "#1E3A5F",
 }
 
 st.set_page_config(page_title="Remanejamento de Estoque", layout="wide",
@@ -99,6 +100,25 @@ html, body, [class*="st-"] {{
 
 /* Linha de contagem/exportação */
 .conta {{ font-size: 12.5px; color: {COR["texto2"]}; padding-top: 0.45rem; }}
+
+/* Tabelas HTML (header azul escuro, fonte branca) */
+.tb-wrap {{
+    overflow: auto; border: 1px solid {COR["borda"]}; border-radius: 8px;
+    background: {COR["superficie"]};
+}}
+.tb {{ border-collapse: separate; border-spacing: 0; width: 100%; font-size: 12.5px; }}
+.tb thead th {{
+    position: sticky; top: 0; z-index: 2;
+    background: {COR["cab_tabela"]}; color: #FFFFFF;
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.04em; padding: 8px 10px; text-align: left; white-space: nowrap;
+}}
+.tb td {{
+    padding: 6px 10px; border-bottom: 1px solid #EDECE8; white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}}
+.tb tbody tr:hover {{ background: #F7F6F3; }}
+.tb-aviso {{ font-size: 11.5px; color: {COR["texto3"]}; margin: 4px 2px 0; }}
 
 /* Painéis com borda (containers) */
 div[data-testid="stVerticalBlockBorderWrapper"] {{
@@ -216,6 +236,40 @@ def _tamanho_de(df):
         tam = prod[["sku_filho", "tamanho"]].drop_duplicates("sku_filho")
         return df.merge(tam, on="sku_filho", how="left")["tamanho"].fillna("—").values
     return df.get("sku_filho", pd.Series(dtype=str)).values
+
+
+def _tabela_html(df: pd.DataFrame, altura: int = 400, fmt: dict | None = None,
+                 css: dict | None = None, max_linhas: int = 1500) -> str:
+    """Tabela HTML com header fixo azul escuro (st.dataframe não permite fonte
+    branca no cabeçalho — o texto vem do tema, sem opção própria).
+
+    fmt: {coluna: fn(valor)->str} formata o texto; css: {coluna: fn(valor)->css}
+    devolve estilo inline da célula. Renderiza até max_linhas (aviso no rodapé).
+    """
+    fmt, css = fmt or {}, css or {}
+    cols = list(df.columns)
+    ths = "".join(f"<th>{_html.escape(str(c))}</th>" for c in cols)
+    linhas = []
+    for row in df.head(max_linhas).itertuples(index=False):
+        tds = []
+        for c, val in zip(cols, row):
+            txt = fmt[c](val) if c in fmt else ("" if val is None else str(val))
+            estilo = css[c](val) if c in css else ""
+            estilo = f" style='{estilo}'" if estilo else ""
+            tds.append(f"<td{estilo}>{_html.escape(txt)}</td>")
+        linhas.append("<tr>" + "".join(tds) + "</tr>")
+    aviso = ""
+    if len(df) > max_linhas:
+        aviso = (f"<div class='tb-aviso'>Mostrando as primeiras {_fmt(max_linhas)} "
+                 f"de {_fmt(len(df))} linhas — refine os filtros ou exporte o arquivo "
+                 "completo.</div>")
+    return (f"<div class='tb-wrap' style='max-height:{altura}px'><table class='tb'>"
+            f"<thead><tr>{ths}</tr></thead><tbody>{''.join(linhas)}</tbody>"
+            f"</table></div>{aviso}")
+
+
+_DIR = "text-align:right"
+_MONO = "font-family:'IBM Plex Mono',monospace;font-size:11px"
 
 
 def _excel_bytes(frames: dict[str, pd.DataFrame]) -> bytes:
@@ -336,14 +390,19 @@ with tab_sug:
             "Score": exib["score_receptora"].astype(float),
             "Parado (dias)": exib["dias_parado_doadora"].astype(int),
         })
-        sty = (disp.style
-               .map(lambda _: f"color:{COR['acento']};font-weight:600", subset=["Score"])
-               .map(lambda x: f"color:{COR['alerta']};font-weight:600" if x >= 60 else "",
-                    subset=["Parado (dias)"])
-               .map(lambda x: (f"color:{COR['alerta']};font-weight:700;"
-                               "font-size:10px;letter-spacing:0.04em") if x else "",
-                    subset=["Grade"])
-               .format({"Score": "{:.1f}"}))
+        tabela = _tabela_html(
+            disp, altura=400,
+            fmt={"Score": lambda x: f"{x:.1f}", "Qtd": lambda x: str(int(x))},
+            css={
+                "Score": lambda _: f"color:{COR['acento']};font-weight:600;{_DIR}",
+                "Qtd": lambda _: _DIR,
+                "Parado (dias)": lambda x: (
+                    f"color:{COR['alerta']};font-weight:600;{_DIR}" if x >= 60 else _DIR),
+                "Grade": lambda x: (f"color:{COR['alerta']};font-weight:700;"
+                                    "font-size:10px;letter-spacing:0.04em") if x else "",
+                "SKU pai": lambda _: _MONO,
+                "Tamanho": lambda _: "text-align:center",
+            })
 
         c_conta, c_limpa, c_csv = st.columns([4.6, 1.1, 1.3])
         c_conta.markdown(f'<div class="conta">{_fmt(len(v))} de {_fmt(len(sug))} '
@@ -356,7 +415,7 @@ with tab_sug:
         c_csv.download_button("Exportar CSV", data=csv, file_name="sugestoes.csv",
                               mime="text/csv", use_container_width=True, type="primary")
 
-        st.dataframe(sty, use_container_width=True, hide_index=True, height=390)
+        st.markdown(tabela, unsafe_allow_html=True)
         st.caption("Limites por SKU filho: Home até 10 · Acessórios até 4 · Roupa até 2 — "
                    "grade quebrada envia todo o estoque do tamanho.")
 
@@ -366,12 +425,22 @@ with tab_sug:
             file_name="remanejamento.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
+    _f1 = lambda x: "—" if pd.isna(x) else f"{float(x):.1f}"  # noqa: E731
     with st.expander("Ver rupturas candidatas"):
-        st.dataframe(nec.rename(columns=NEC_RENOME),
-                     use_container_width=True, hide_index=True)
+        st.markdown(_tabela_html(
+            nec.rename(columns=NEC_RENOME), altura=360, max_linhas=500,
+            fmt={"Prev. 4 sem (pç)": _f1, "Cobertura pai (sem)": _f1, "Score": _f1},
+            css={"Score": lambda _: _DIR, "Prev. 4 sem (pç)": lambda _: _DIR,
+                 "Cobertura pai (sem)": lambda _: _DIR, "Qtd sugerida": lambda _: _DIR,
+                 "SKU pai": lambda _: _MONO, "SKU filho": lambda _: _MONO}),
+            unsafe_allow_html=True)
     with st.expander("Ver pares doadores elegíveis"):
-        st.dataframe(doa.rename(columns=DOA_RENOME),
-                     use_container_width=True, hide_index=True)
+        st.markdown(_tabela_html(
+            doa.rename(columns=DOA_RENOME), altura=360, max_linhas=500,
+            fmt={"Em loja (dias)": _f1},
+            css={"Qtd disponível": lambda _: _DIR, "Sem venda (dias)": lambda _: _DIR,
+                 "Em loja (dias)": lambda _: _DIR, "SKU filho": lambda _: _MONO}),
+            unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
 with tab_rup:
