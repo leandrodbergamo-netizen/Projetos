@@ -1,13 +1,14 @@
 """Painel SKU pai (linhas) × Loja (colunas).
 
-Cada célula traz, em linhas separadas:
-  QLF: peças vendidas (janela) | STK: estoque total | Dias: dias desde o recebimento
-A cor de fundo da célula vem das peças vendidas (QLF). A 1ª coluna traz a foto do
-SKU pai (se houver URL configurada) e a descrição.
+Cada célula traz um número dominante (QLF = peças vendidas na janela) e o
+estoque pequeno embaixo ("stk N"). Item parado ≥ 60 dias vira um ponto
+terracota no canto. O fundo usa 3 tons pastel conforme a intensidade de
+venda. A 1ª coluna (sticky) traz thumbnail, descrição e SKU pai.
 """
 from __future__ import annotations
 
 import html as _html
+import re as _re
 from datetime import date
 
 import pandas as pd
@@ -16,18 +17,22 @@ import config
 
 _COLS_FILTRO = ["linha", "grupo", "subgrupo", "colecao", "status"]
 
+# Tons pastel de fundo (venda alta / média / baixa) — texto escuro sempre.
+_TOM_ALTA, _TOM_MEDIA, _TOM_BAIXA = "#DCEBE4", "#FAF7EE", "#F7E8E2"
+_DIAS_PARADO = 60
+_SEM_SOUQ = _re.compile(r"^Souq\s+", flags=_re.IGNORECASE)
 
-def _cor(v: float, vmax: float) -> str:
-    """Cor de fundo (vermelho→amarelo→verde) proporcional à venda."""
-    import matplotlib
-    import matplotlib.colors as mcolors
-    norm = mcolors.Normalize(vmin=0, vmax=max(vmax, 1))
-    try:
-        cmap = matplotlib.colormaps["RdYlGn"]
-    except Exception:
-        cmap = matplotlib.cm.get_cmap("RdYlGn")
-    r, g, b, _ = cmap(norm(v))
-    return f"rgba({int(r*255)},{int(g*255)},{int(b*255)},0.55)"
+
+def _tom(v: float, vmax: float) -> str:
+    """Fundo pastel em 3 faixas da venda (0 = branco neutro)."""
+    if v <= 0:
+        return "#FFFFFF"
+    vmax = max(vmax, 1.0)
+    if v >= (2 / 3) * vmax:
+        return _TOM_ALTA
+    if v >= (1 / 3) * vmax:
+        return _TOM_MEDIA
+    return _TOM_BAIXA
 
 
 def _matrizes(dados, hoje, janela_dias, filtros, top_n):
@@ -102,7 +107,7 @@ def opcoes_filtro(dados) -> dict:
 
 def html_painel(dados, hoje: date, janela_dias: int = config.JANELA_VENDAS_DIAS,
                 filtros: dict | None = None, top_n: int = 25) -> str | None:
-    """Monta o painel como tabela HTML (foto + descrição + células QLF/STK/Dias)."""
+    """Monta o painel como tabela HTML (legenda + thumbnail + células QLF/stk)."""
     res = _matrizes(dados, hoje, janela_dias, filtros, top_n)
     if res is None:
         return None
@@ -110,20 +115,50 @@ def html_painel(dados, hoje: date, janela_dias: int = config.JANELA_VENDAS_DIAS,
     vmax = float(mat_v.to_numpy().max() or 1)
     lojas = list(mat_v.columns)
 
-    css = """
+    css = f"""
     <style>
-    .ve-wrap{overflow-x:auto}
-    .ve{border-collapse:collapse;font-size:12px}
-    .ve th,.ve td{border:1px solid #ddd;padding:4px 6px;text-align:center;vertical-align:middle}
-    .ve th.prod,.ve td.prod{position:sticky;left:0;background:#fff;text-align:left;min-width:170px;z-index:1}
-    .ve th{background:#f4f4f4;position:sticky;top:0}
-    .ve img{height:46px;border-radius:4px;display:block;margin-bottom:2px}
-    .ve .lin{white-space:nowrap}
+    .ve-leg{{display:flex;align-items:center;gap:14px;font:12px 'IBM Plex Sans',sans-serif;
+        color:#1C1E21;background:#fff;border:1px solid #E4E2DD;border-bottom:none;
+        border-radius:10px 10px 0 0;padding:8px 14px}}
+    .ve-leg .sw{{display:inline-block;width:12px;height:12px;border-radius:3px;
+        margin-right:5px;vertical-align:-1px;border:1px solid #E4E2DD}}
+    .ve-leg .pt{{display:inline-block;width:7px;height:7px;border-radius:50%;
+        background:#B04A3A;margin-right:5px;vertical-align:1px}}
+    .ve-leg .dir{{margin-left:auto;color:#9A9E9C;font-size:11px}}
+    .ve-wrap{{overflow-x:auto;border:1px solid #E4E2DD;border-radius:0 0 10px 10px;background:#fff}}
+    .ve{{border-collapse:separate;border-spacing:0;font:12px 'IBM Plex Sans',sans-serif;
+        color:#1C1E21;min-width:100%}}
+    .ve th,.ve td{{border-bottom:1px solid #EDECE8;padding:5px 8px;text-align:center;
+        vertical-align:middle}}
+    .ve thead th{{position:sticky;top:0;background:#FAFAF8;color:#6B7075;font-size:10px;
+        font-weight:600;text-transform:uppercase;letter-spacing:.05em;z-index:2;
+        max-width:96px;white-space:normal;line-height:1.3;border-bottom:1px solid #E4E2DD}}
+    .ve th.prod,.ve td.prod{{position:sticky;left:0;background:#fff;text-align:left;
+        min-width:215px;max-width:240px;z-index:1;border-right:1px solid #E4E2DD}}
+    .ve thead th.prod{{z-index:3;background:#FAFAF8}}
+    .ve td{{position:relative;height:52px}}
+    .ve .qlf{{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}}
+    .ve .stk{{font-size:10px;color:#6B7075;font-variant-numeric:tabular-nums}}
+    .ve .dot{{position:absolute;top:5px;right:6px;width:6px;height:6px;border-radius:50%;
+        background:#B04A3A}}
+    .ve .pcel{{display:flex;gap:9px;align-items:center}}
+    .ve img,.ve .noimg{{width:40px;height:40px;border-radius:6px;object-fit:cover;
+        flex:0 0 40px;display:block}}
+    .ve .noimg{{background:#ECEAE5}}
+    .ve .pnome{{font-weight:500;line-height:1.3}}
+    .ve .psku{{font:10px 'IBM Plex Mono',monospace;color:#9A9E9C}}
     </style>
     """
-    out = [css, '<div class="ve-wrap"><table class="ve">']
-    out.append("<tr><th class='prod'>Produto</th>" +
-               "".join(f"<th>{_html.escape(str(l))}</th>" for l in lojas) + "</tr>")
+    leg = (f'<div class="ve-leg"><b>Legenda</b>'
+           f'<span><span class="sw" style="background:{_TOM_ALTA}"></span>Venda alta</span>'
+           f'<span><span class="sw" style="background:{_TOM_MEDIA}"></span>Venda média</span>'
+           f'<span><span class="sw" style="background:{_TOM_BAIXA}"></span>Venda baixa</span>'
+           f'<span><span class="pt"></span>Parado &gt; {_DIAS_PARADO} dias</span>'
+           f'<span class="dir">QLF grande · stk pequeno</span></div>')
+
+    out = [css, leg, '<div class="ve-wrap"><table class="ve">']
+    cab = "".join(f"<th>{_html.escape(_SEM_SOUQ.sub('', str(l)))}</th>" for l in lojas)
+    out.append(f"<thead><tr><th class='prod'>Produto</th>{cab}</tr></thead><tbody>")
 
     for pai in mat_v.index:
         url = foto.get(pai)
@@ -132,19 +167,22 @@ def html_painel(dados, hoje: date, janela_dias: int = config.JANELA_VENDAS_DIAS,
                 url = config.URL_FOTO_TEMPLATE.format(sku_pai=pai, sku_filho="")
             except Exception:
                 url = None
-        img = f"<img src='{_html.escape(str(url))}' loading='lazy'/>" if url and str(url) != "nan" else ""
-        d = _html.escape(str(desc.get(pai, "")))
-        cels = [f"<td class='prod'>{img}<b>{_html.escape(str(pai))}</b><br>{d}</td>"]
+        img = (f"<img src='{_html.escape(str(url))}' loading='lazy'/>"
+               if url and str(url) != "nan" else "<span class='noimg'></span>")
+        nome = _html.escape(str(desc.get(pai, "")).title())
+        cels = [f"<td class='prod'><div class='pcel'>{img}"
+                f"<div><div class='pnome'>{nome}</div>"
+                f"<div class='psku'>{_html.escape(str(pai))}</div></div></div></td>"]
         for l in lojas:
             v = int(mat_v.at[pai, l]); e = int(mat_e.at[pai, l])
             dd = dias.at[pai, l]
-            d_txt = "—" if pd.isna(dd) else f"{int(dd)}"
-            bg = _cor(v, vmax)
+            ponto = ""
+            if not pd.isna(dd) and int(dd) >= _DIAS_PARADO:
+                ponto = f"<span class='dot' title='Recebido há {int(dd)} dias'></span>"
             cels.append(
-                f"<td style='background:{bg}'><span class='lin'>QLF: {v}</span><br>"
-                f"<span class='lin'>STK: {e}</span><br>"
-                f"<span class='lin'>Dias: {d_txt}</span></td>")
+                f"<td style='background:{_tom(v, vmax)}'>{ponto}"
+                f"<div class='qlf'>{v}</div><div class='stk'>stk {e}</div></td>")
         out.append("<tr>" + "".join(cels) + "</tr>")
 
-    out.append("</table></div>")
+    out.append("</tbody></table></div>")
     return "".join(out)
