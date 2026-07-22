@@ -15,7 +15,11 @@ from data_source import carregar_dados
 st.set_page_config(page_title="Remanejamento entre Lojas", layout="wide")
 st.title("🔁 Remanejamento de Estoque entre Lojas")
 
-# --- Barra lateral: parâmetros de negócio ----------------------------------
+# --- Barra lateral: menu + parâmetros de negócio ---------------------------
+PAGINAS = ["📦 Sugestões", "🚨 Ruptura (Dashboard)", "🧮 Painel Vendas × Estoque"]
+pagina = st.sidebar.radio("Menu", PAGINAS)
+st.sidebar.divider()
+
 st.sidebar.header("Parâmetros")
 hoje = config.data_referencia()
 st.sidebar.caption(f"Data de referência: **{hoje.isoformat()}**  •  Fonte: **{config.FONTE_DADOS}**")
@@ -46,8 +50,12 @@ def _carregar(hoje_iso: str):
 @st.cache_data(show_spinner="Calculando sugestões...")
 def _resultado(hoje_iso: str, semanas_min: int, max_lojas: int, janela: int):
     dados = _carregar(hoje_iso)
-    return engine.calcular(dados, config.data_referencia(),
-                           semanas_min=semanas_min, max_lojas=max_lojas, janela_dias=janela)
+    res = engine.calcular(dados, config.data_referencia(),
+                          semanas_min=semanas_min, max_lojas=max_lojas, janela_dias=janela)
+    # Potencial SEM o teto de lojas por doadora (indicador % Cobertura).
+    res["potencial"] = engine.gerar_sugestoes(
+        res["necessidades"], res["doadoras"], dados, max_lojas=10**9)
+    return res
 
 
 @st.cache_data(show_spinner="Calculando ruptura...")
@@ -58,6 +66,7 @@ def _rup_skus(hoje_iso: str):
 dados = _carregar(hoje.isoformat())
 res = _resultado(hoje.isoformat(), semanas_min, max_lojas, janela)
 nec, doa, sug = res["necessidades"], res["doadoras"], res["sugestoes"]
+pot = res["potencial"]
 
 
 def _excel_bytes(frames: dict[str, pd.DataFrame]) -> bytes:
@@ -81,32 +90,73 @@ def _filtra(df, col, label, container):
     return df[df[col].isin(sel)] if sel else df
 
 
-aba_sug, aba_rup, aba_ve = st.tabs([
-    "📦 Sugestões", "🚨 Ruptura (Dashboard)", "🧮 Painel Vendas × Estoque"])
+def _selecao(df, col, label, container):
+    """Só desenha o multiselect e devolve a seleção (para aplicar em >1 tabela)."""
+    return container.multiselect(label, _opcoes(df, col))
+
+
+def _aplica(df, filtros: dict):
+    for col, sel in filtros.items():
+        if sel and col in df.columns:
+            df = df[df[col].isin(sel)]
+    return df
+
+
+def _com_tamanho(df):
+    """Exibição: troca sku_filho pela descrição do tamanho (o Excel mantém o SKU)."""
+    prod = dados["produtos"]
+    if "tamanho" not in prod.columns or "sku_filho" not in df.columns:
+        return df
+    tam = prod[["sku_filho", "tamanho"]].drop_duplicates("sku_filho")
+    out = df.merge(tam, on="sku_filho", how="left")
+    ordem = ["tamanho" if c == "sku_filho" else c for c in df.columns]
+    return out[ordem]
+
 
 # ---------------------------------------------------------------------------
-with aba_sug:
-    c1, c2, c3 = st.columns(3)
+if pagina == PAGINAS[0]:
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Rupturas candidatas", len(nec))
     c2.metric("Pares doadores elegíveis", len(doa))
-    c3.metric("Transferências sugeridas", len(sug))
+    # Preenchidos após os filtros, para os cards refletirem a seleção atual.
+    met_sug = c3.empty()
+    met_cob = c4.empty()
 
     st.subheader("Sugestões")
     if sug.empty:
+        met_sug.metric("Transferências sugeridas", 0)
+        met_cob.metric("% Cobertura da regra", "—")
         st.info("Nenhuma transferência sugerida com os parâmetros atuais.")
     else:
         f1, f2, f3 = st.columns(3)
         f4, f5, f6 = st.columns(3)
-        v = sug.copy()
-        v = _filtra(v, "linha", "Linha", f1)
-        v = _filtra(v, "grupo", "Grupo", f2)
-        v = _filtra(v, "subgrupo", "Subgrupo", f3)
-        v = _filtra(v, "colecao", "Coleção", f4)
-        v = _filtra(v, "status", "Status do produto", f5)
-        v = _filtra(v, "loja_receptora", "Loja receptora", f6)
+        filtros = {
+            "linha": _selecao(sug, "linha", "Linha", f1),
+            "grupo": _selecao(sug, "grupo", "Grupo", f2),
+            "subgrupo": _selecao(sug, "subgrupo", "Subgrupo", f3),
+            "colecao": _selecao(sug, "colecao", "Coleção", f4),
+            "status": _selecao(sug, "status", "Status do produto", f5),
+            "loja_receptora": _selecao(sug, "loja_receptora", "Loja receptora", f6),
+        }
+        v = _aplica(sug, filtros)
+        vp = _aplica(pot, filtros)
+
+        filtrado = len(v) != len(sug)
+        met_sug.metric("Transferências sugeridas", len(v),
+                       delta=f"de {len(sug)}" if filtrado else None, delta_color="off")
+
+        # % Cobertura: peças sugeridas COM o teto de lojas por doadora sobre o
+        # potencial SEM o teto (ambos com os filtros aplicados).
+        pecas, pecas_pot = int(v["qtd"].sum()), int(vp["qtd"].sum())
+        cob_pct = 100.0 * pecas / pecas_pot if pecas_pot else 100.0
+        met_cob.metric(
+            "% Cobertura da regra", f"{cob_pct:.0f}%",
+            delta=f"{pecas} de {pecas_pot} peças", delta_color="off",
+            help=f"Quanto o teto de {max_lojas} lojas por doadora cobre do potencial "
+                 "de transferência sem esse teto, considerando os filtros aplicados.")
 
         st.caption(f"{len(v)} de {len(sug)} sugestões")
-        st.dataframe(v, use_container_width=True, hide_index=True)
+        st.dataframe(_com_tamanho(v), use_container_width=True, hide_index=True)
         st.download_button(
             "⬇️ Baixar Excel (sugestões + detalhes)",
             data=_excel_bytes({"sugestoes": sug, "necessidades": nec, "doadoras": doa}),
@@ -125,7 +175,7 @@ with aba_sug:
         st.dataframe(doa, use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------------------------
-with aba_rup:
+elif pagina == PAGINAS[1]:
     st.subheader("Ruptura")
     rs = _rup_skus(hoje.isoformat())
     if rs.empty:
@@ -175,7 +225,7 @@ with aba_rup:
                      use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------------------------
-with aba_ve:
+else:
     st.caption("Linhas = SKU pai • Colunas = loja. Célula: **QLF** (vendas) / **STK** (estoque) / "
                "**Dias** (desde o recebimento). Cor = peças vendidas.")
     op = painel.opcoes_filtro(dados)

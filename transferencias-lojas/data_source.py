@@ -57,7 +57,8 @@ def _build_excel(hoje: date) -> dict[str, pd.DataFrame]:
 
     # --- Produtos (grupo via desc_linha; dt_envio p/ recebimento) -------
     cols_prod = ["sk_produto", "cod_sku_pai", "desc_item", "desc_linha", "desc_grupo_wgb",
-                 "desc_sub_grupo_wbg", "desc_material", "dt_envio", "desc_colecao", "url"]
+                 "desc_sub_grupo_wbg", "desc_material", "dt_envio", "desc_colecao", "url",
+                 "desc_tamanho"]
     prod = _ler_excel(config.ARQ_PRODUTOS, "Consulta1", usecols=cols_prod)
     prod = prod.dropna(subset=["sk_produto", "cod_sku_pai"]).drop_duplicates("sk_produto")
     dt_envio = pd.to_datetime(prod["dt_envio"], errors="coerce")
@@ -66,6 +67,7 @@ def _build_excel(hoje: date) -> dict[str, pd.DataFrame]:
         "sku_filho": prod["sk_produto"].astype("int64").astype(str),
         "sku_pai": prod["cod_sku_pai"].astype(str),
         "descricao": prod["desc_item"].astype(str),
+        "tamanho": prod["desc_tamanho"].fillna("—").astype(str),          # P/M/G, 36..46, U (único)
         "linha": prod["desc_linha"].astype(str),                          # Linha (ROUPA/HOME/ACESSÓRIO)
         "grupo": prod["desc_grupo_wgb"].astype(str),                      # Grupo merchandising (display/filtro)
         "subgrupo": prod["desc_sub_grupo_wbg"].astype(str),               # Subgrupo (BLUSA/COLAR)
@@ -191,7 +193,7 @@ def carregar_mock(hoje: date | None = None) -> dict[str, pd.DataFrame]:
 
     produtos = pd.DataFrame(
         [{"sku_filho": f"{pai}-{tam}", "sku_pai": pai,
-          "descricao": f"Produto {pai} tam {tam}",
+          "descricao": f"Produto {pai} tam {tam}", "tamanho": tam,
           "linha": grupos[int(pai[-1]) % 3].upper(), "colecao": "INVERNO 2026",
           "status": "NOVIDADE",
           "grupo": "GRUPO " + grupos[int(pai[-1]) % 3], "subgrupo": "GERAL",
