@@ -239,12 +239,10 @@ def distribuir(
     avisos: List[str] = []
     reserva, disponivel = reservar_cd(aposta_total, reserva_cd_pct)
 
-    # teto de cobertura por loja (só se houver velocidade informada)
+    # teto de cobertura por loja (opcional; só se houver velocidade informada)
     tetos: Optional[Dict[str, float]] = None
     if velocidades_semanais:
         tetos = {l: v * cobertura_max_semanas for l, v in velocidades_semanais.items()}
-    else:
-        avisos.append("Sem velocidades por loja: teto de cobertura não aplicado (fallback).")
 
     aloc = distribuir_por_participacao(disponivel, participacoes, tetos)
     aloc = aplicar_grade_minima(aloc, grade_minima, participacoes)

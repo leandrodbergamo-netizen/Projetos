@@ -24,13 +24,9 @@ def render() -> None:
         fim_inverno = b.text_input("INVERNO (dd/mm)", str(cfg.get("fim_periodo_inverno", "14/06")))
     with c2, st.container(border=True):
         st.subheader("Distribuição")
-        st.caption("Teto de cobertura e a reserva CD sugerida ao abrir uma aposta.")
-        a, b = st.columns(2)
-        cobertura = a.number_input(
-            "Cobertura máx. (semanas)", 1.0, 26.0,
-            float(cfg.get("cobertura_maxima_semanas", 6)), 1.0,
-            help="Nenhuma loja recebe mais que N semanas da sua própria velocidade de venda.")
-        reserva_cd_pct = b.number_input(
+        st.caption("A reserva CD sugerida ao abrir uma aposta — é ela que garante a "
+                   "reposição (não há teto de cobertura por loja).")
+        reserva_cd_pct = st.number_input(
             "Reserva CD padrão (%)", 0, 50,
             int(round(100 * float(cfg.get("reserva_cd_pct", 0.20)))), 5) / 100.0
 
@@ -60,7 +56,6 @@ def render() -> None:
         "reserva_cd_pct": reserva_cd_pct,
         "fim_periodo_verao": fim_verao.strip(),
         "fim_periodo_inverno": fim_inverno.strip(),
-        "cobertura_maxima_semanas": cobertura,
         "min_amostra_curva": int(min_amostra),
         "desde_colecao": desde_colecao,
     }

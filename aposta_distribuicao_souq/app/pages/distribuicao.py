@@ -13,9 +13,30 @@ from app import estilo
 from core.config_utils import load_config
 from core.dados import (cluster_por_loja, espelhos_loja_nova, lojas_alvo_souq,
                         opcoes_perfil_clima)
-from core.regra_distribuicao import distribuir, participacao_com_loja_nova
+from core.regra_distribuicao import (arredondar_maior_resto, distribuir,
+                                     normalizar_curva, participacao_com_loja_nova)
 
 TODOS = "TODOS"
+CD_ROTULO = "CD (reserva / reposição)"
+
+
+def _cd_por_tamanho(aposta_final: float, lojas_matriz: pd.DataFrame, curva: dict) -> dict:
+    """Abre o saldo do CD por tamanho: alvo da compra (curva × aposta final)
+    menos o distribuído nas lojas, preservando o total."""
+    curva_n = normalizar_curva({t: p for t, p in (curva or {}).items() if p > 0})
+    if not curva_n:
+        return {}
+    alvo = arredondar_maior_resto({t: aposta_final * p for t, p in curva_n.items()},
+                                  int(round(aposta_final)))
+    nas_lojas = lojas_matriz.sum(axis=0)
+    cd = {t: int(alvo.get(t, 0)) - int(nas_lojas.get(t, 0)) for t in alvo}
+    deficit = -sum(v for v in cd.values() if v < 0)
+    cd = {t: max(v, 0) for t, v in cd.items()}
+    while deficit > 0 and any(v > 0 for v in cd.values()):
+        t_max = max(cd, key=cd.get)
+        cd[t_max] -= 1
+        deficit -= 1
+    return cd
 
 
 def _mostra_resultado(resultado, lojas_df, proj, aposta_total=None, chave_editor="0"):
@@ -34,8 +55,9 @@ def _mostra_resultado(resultado, lojas_df, proj, aposta_total=None, chave_editor
         st.info(aviso)
 
     st.subheader("Matriz loja × tamanho")
-    st.caption("As células são **editáveis**. Edite quantas quiser e clique em "
-               "**Aplicar edições** — os totais recalculam de uma vez só.")
+    st.caption("As células são **editáveis**. Edite as lojas e clique em **Aplicar "
+               "edições** — o que sai de loja volta para a linha do **CD** (e "
+               "vice-versa); a aposta final não muda. A linha do CD é recalculada.")
     if st.session_state.get("flash_matriz"):
         st.caption(f":green[{st.session_state.pop('flash_matriz')}]")
     matriz = pd.DataFrame(resultado.matriz).T.fillna(0).astype(int)
@@ -49,13 +71,16 @@ def _mostra_resultado(resultado, lojas_df, proj, aposta_total=None, chave_editor
              for _, r in lojas_df.iterrows()}
     matriz.index = [nomes.get(i, i) for i in matriz.index]
 
-    # a matriz-base é a última edição aplicada (ou a sugestão do modelo); a
-    # coluna TOTAL é recalculada a cada "Aplicar edições"
+    # a matriz-base (só lojas) é a última edição aplicada; o CD entra como linha
+    # calculada = alvo da compra por tamanho − distribuído nas lojas
     d_sess = st.session_state.get("distribuicao") or {}
     aplicadas = int(d_sess.get("aplicacoes", 0))
     base = d_sess.get("matriz_aplicada")
     base = matriz if base is None else base
+    cd = _cd_por_tamanho(aposta_final, base, proj.get("curva_tamanhos"))
     exibe = base.copy()
+    if cd:
+        exibe.loc[CD_ROTULO] = [cd.get(c, 0) for c in exibe.columns]
     exibe["TOTAL"] = exibe.sum(axis=1)
     chave = f"{chave_editor}_{aplicadas}"
     # o form segura os reruns: as edições só são processadas no clique
@@ -67,26 +92,38 @@ def _mostra_resultado(resultado, lojas_df, proj, aposta_total=None, chave_editor
                            "TOTAL": st.column_config.NumberColumn("TOTAL", format="%d")},
             disabled=["TOTAL"])
         if st.form_submit_button("Aplicar edições", type="primary"):
-            d_sess["matriz_aplicada"] = editada.drop(columns=["TOTAL"])
+            d_sess["matriz_aplicada"] = (editada.drop(columns=["TOTAL"])
+                                         .drop(index=CD_ROTULO, errors="ignore"))
             d_sess["aplicacoes"] = aplicadas + 1
             st.rerun()
 
     aplicada = d_sess.get("matriz_aplicada")
     aplicada = base if aplicada is None else aplicada
-    # totalizador sempre visível: total por tamanho + total geral
-    linha_tot = aplicada.sum(axis=0).to_frame().T.astype(int)
+    cd_final = _cd_por_tamanho(aposta_final, aplicada, proj.get("curva_tamanhos"))
+    completa = aplicada.copy()
+    if cd_final:
+        completa.loc[CD_ROTULO] = [cd_final.get(c, 0) for c in completa.columns]
+
+    # totalizador sempre visível: total por tamanho (lojas + CD) + total geral
+    linha_tot = completa.sum(axis=0).to_frame().T.astype(int)
     linha_tot["TOTAL"] = linha_tot.sum(axis=1)
     linha_tot.index = ["TOTAL por tamanho"]
     st.dataframe(linha_tot, width="stretch")
 
-    tot_editado = int(aplicada.to_numpy().sum())
+    tot_lojas = int(aplicada.to_numpy().sum())
+    tot_cd = int(sum(cd_final.values())) if cd_final else 0
     tot_modelo = int(resultado.total_distribuido())
-    delta = tot_editado - tot_modelo
-    c1, c2, _ = st.columns([1.4, 1.4, 2])
-    c1.metric("Distribuído (após edição)", f"{tot_editado}",
+    delta = tot_lojas - tot_modelo
+    c1, c2, c3, _ = st.columns([1.3, 1.1, 1.1, 1.5])
+    c1.metric("Nas lojas (após edição)", f"{tot_lojas}",
               delta=f"{delta:+d} un vs modelo" if delta else None)
-    c2.metric("Aposta final (após edição)", f"{aposta_final + delta:.0f}")
-    st.session_state["ultima_distribuicao"] = aplicada
+    c2.metric("No CD", f"{tot_cd}")
+    c3.metric("Aposta final", f"{aposta_final:.0f}",
+              help="Fixa: a edição move peças entre lojas e CD, não muda a compra.")
+    if tot_lojas + tot_cd != int(round(aposta_final)):
+        st.warning(f"As lojas ({tot_lojas} un) excedem a aposta final "
+                   f"({aposta_final:.0f} un) — o CD zerou. Reduza lojas ou aumente a aposta.")
+    st.session_state["ultima_distribuicao"] = completa
 
     b1, b2, _ = st.columns([1.8, 1.8, 2])
     if b1.button("↺ Recarregar sugestão do modelo"):
@@ -100,14 +137,15 @@ def _mostra_resultado(resultado, lojas_df, proj, aposta_total=None, chave_editor
         try:
             from core import historico
 
+            # grade completa para exportação: lojas + linha do CD
             matriz_dict = {str(i): {str(c): int(v) for c, v in linha.items()}
-                           for i, linha in aplicada.iterrows()}
+                           for i, linha in completa.iterrows()}
             with st.spinner("Salvando no Histórico…"):
                 historico.salvar(proj["resumo"] + " · distribuição", {
                     **proj,
                     "distribuicao_editada": matriz_dict,
-                    "aposta_final": float(aposta_final + delta),
-                    "distribuido_editado": tot_editado,
+                    "aposta_final": float(aposta_final),
+                    "distribuido_editado": tot_lojas,
                 })
             st.session_state["flash_matriz"] = "Distribuição salva no Histórico ✓"
         except Exception:
@@ -119,8 +157,8 @@ def secao(proj: dict) -> None:
     """Renderiza a seção de distribuição para a projeção atual."""
     st.subheader("Distribuição")
     st.caption("Participação por loja (loja nova usa a loja espelho ou o cluster "
-               "Perfil+Clima) · teto de cobertura · teto por SKU-tamanho. "
-               "Ecom entra na aposta, não na matriz física.")
+               "Perfil+Clima) · reposição garantida pela reserva do CD · teto por "
+               "SKU-tamanho. Ecom entra na aposta, não na matriz física.")
 
     cfg = load_config()
 
@@ -162,14 +200,6 @@ def secao(proj: dict) -> None:
     if usando_espelho:
         st.caption("Lojas novas por loja espelho: " + " · ".join(usando_espelho) + ".")
 
-    # teto de cobertura coerente com a participação: velocidade esperada da loja
-    # = velocidade média por loja × índice de participação (part × nº de lojas)
-    vel_media = proj.get("vel_media_loja")
-    if vel_media:
-        velocidades = {l: vel_media * p * len(part) for l, p in part.items()}
-    else:
-        velocidades = proj.get("velocidades_loja") or None   # cenários antigos
-
     with st.expander("Participação por loja (o que puxa a distribuição)"):
         st.caption("**% usada** é a participação final (com loja espelho/cluster); "
                    "**% segmento** vem do pool suavizado; **% espelhos** só dos "
@@ -200,26 +230,23 @@ def secao(proj: dict) -> None:
     m2.metric("Lojas-alvo", f"{len(lojas_alvo)}")
     m3.metric("Novas (extrapoladas)", f"{len(novas)}")
 
-    cobertura = float(cfg.get("cobertura_maxima_semanas", 6))
     n_tam = len([t for t, p in (proj["curva_tamanhos"] or {}).items() if p > 0])
     garantir = st.checkbox(
-        "Garantir ao menos 1 peça por tamanho", value=False,
+        "Garantir ao menos 1 peça por tamanho", value=True,
         help=f"TODAS as lojas-alvo recebem 1 de cada um dos {n_tam} tamanhos. As peças "
-             "que faltarem são SOMADAS à aposta (não reduzem o rateio das demais lojas "
-             "nem a reserva do CD); um aviso mostra o acréscimo.")
-    st.caption(f"Teto de cobertura (Configurações): máx. **{cobertura:.0f} semanas** "
-               "da velocidade da própria loja.")
+             "que faltarem saem primeiro do CD (sobra e reserva) e, só se o CD zerar, "
+             "são somadas à aposta; um aviso mostra cada movimento.")
 
     if st.button(f"Distribuir {aposta_usada:.0f} un em {len(lojas_alvo)} lojas",
                  type="primary"):
         with st.spinner("Distribuindo entre as lojas…"):
+            # sem teto de cobertura (decisão do negócio): quem regula a loja é a
+            # participação; a reposição fica garantida pela reserva do CD
             resultado = distribuir(
                 aposta_total=aposta_usada,
                 participacoes=part,
                 curva_tamanhos=proj["curva_tamanhos"],
                 reserva_cd_pct=proj.get("reserva_cd_pct", 0.20),
-                velocidades_semanais=velocidades,
-                cobertura_max_semanas=cobertura,
                 max_por_tamanho_loja=max_tam,
                 garantir_grade_completa=garantir,
             )
