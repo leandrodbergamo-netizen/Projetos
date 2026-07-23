@@ -106,8 +106,9 @@ def render() -> None:
             payload = sel["payload"]
             st.session_state["projecao"] = {
                 k: payload[k] for k in ("resumo", "aposta_total", "reserva_cd_pct",
-                                        "participacoes_hist", "curva_tamanhos",
-                                        "velocidades_loja", "espelhos", "suavizacao",
+                                        "participacoes_hist", "participacoes_espelhos",
+                                        "curva_tamanhos", "velocidades_loja",
+                                        "vel_media_loja", "espelhos", "suavizacao",
                                         "lojas_com_espelho_proprio", "inputs",
                                         "resultado", "avisos_projecao", "contribuicoes")
                 if k in payload

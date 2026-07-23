@@ -19,7 +19,7 @@ from core.dados import (colecoes_projetaveis, curva_tamanhos, fim_periodo_saudav
                         participacao_lojas, semanas_ate)
 from core.espelho import (candidatos_espelho, enriquecer_velocidade, grades_por_modelo,
                           janelas_full_price, pool_suavizacao, projetar_aposta,
-                          velocidade_de_cada_loja, velocidade_por_loja_desaz)
+                          velocidade_por_loja_desaz)
 from core.sazonalidade import curva_por
 from core.taxonomia import faixa_preco, ordem_tamanhos, rotulo_grade
 
@@ -337,8 +337,12 @@ def _projetar(cfg, pp, fp, cand, curva, ctx, escolhidos, horizonte, janelas,
         "aposta_total": ap.aposta_sugerida,
         "reserva_cd_pct": form["reserva_pct"] / 100.0,
         "participacoes_hist": participacoes,
+        "participacoes_espelhos": part_espelhos,
         "curva_tamanhos": curva_tam,
-        "velocidades_loja": velocidade_de_cada_loja(fp, skus, curva, ctx["ecom_locs"]),
+        # o teto de cobertura deriva desta média × participação da loja — medir a
+        # velocidade em janelas individuais por loja invertia o ranking (loja
+        # grande de janela longa parecia lenta e era travada pelo teto)
+        "vel_media_loja": ap.vel_por_loja_desaz,
         "espelhos": skus,
         "suavizacao": {"n_modelos": n_pool, "fits": fits},
         "lojas_com_espelho_proprio": sorted(part_espelhos),
