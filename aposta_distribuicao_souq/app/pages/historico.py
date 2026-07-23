@@ -79,16 +79,19 @@ def render() -> None:
                 "ela aparece aqui automaticamente.")
         return
 
+    sel_todos = st.checkbox("Selecionar todos", key="hist_sel_todos")
     tabela = pd.DataFrame({
-        "Sel": False,
+        "Sel": sel_todos,
         "quando": _hora_local(df["criado_em"]).dt.strftime("%d/%m/%Y %H:%M"),
         "cenário": df["resumo"],
         "aposta": df["payload"].map(lambda p: round(p.get("aposta_total", 0))),
         "espelhos": df["payload"].map(lambda p: len(p.get("espelhos", []))),
     })
+    # a chave muda com o toggle: o editor renasce com todas as linhas (des)marcadas,
+    # e depois cada linha continua editável individualmente
     editado = st.data_editor(
-        tabela, hide_index=True, width="stretch", key="editor_historico",
-        column_config={"Sel": st.column_config.CheckboxColumn("Sel", default=False)},
+        tabela, hide_index=True, width="stretch", key=f"editor_historico_{int(sel_todos)}",
+        column_config={"Sel": st.column_config.CheckboxColumn("Sel", default=sel_todos)},
         disabled=[c for c in tabela.columns if c != "Sel"])
     idx = editado.index[editado["Sel"]].tolist()
     if not idx:
