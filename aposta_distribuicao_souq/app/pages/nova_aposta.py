@@ -1,11 +1,11 @@
-"""Nova Aposta — simulador de reunião.
+"""Nova Aposta — simulador de reunião (aposta E distribuição na mesma aba).
 
 Fluxo: características do produto novo -> tabela de candidatos a espelho (com
 foto) -> seleção -> projeção da aposta (velocidade desazonalizada + sazonalidade
-+ Ecom) -> envia participações/curva/velocidades para a aba Distribuição.
++ Ecom) -> distribuição loja × tamanho logo abaixo, na mesma tela.
 
-Os parâmetros gerais (aproveitamento, fim de período, tetos) ficam em
-**Configurações**; aqui só entra a premissa de reserva CD, que é da aposta.
+Os parâmetros gerais (fim de período, cobertura) ficam em **Configurações**;
+aproveitamento, reserva CD e teto por SKU-tamanho são editados aqui mesmo.
 """
 from datetime import date
 
@@ -14,6 +14,7 @@ import streamlit as st
 
 from app.dados_app import (contexto_lojas, opcoes, opcoes_por_relevancia,
                            produtos_prep, totais_por_sku, vendas_fp)
+from app.pages import distribuicao
 from core.config_utils import load_config
 from core.dados import (colecoes_projetaveis, curva_tamanhos, fim_periodo_saudavel,
                         participacao_lojas, semanas_ate)
@@ -83,7 +84,7 @@ def render() -> None:
             help="Fração da aposta que se espera vender a full price no período.") / 100.0
     with c6:
         reserva_pct = st.number_input(
-            "Reserva CD (%)", 0, 50, int(round(100 * float(cfg.get("reserva_cd_pct", 0.20)))), 1,
+            "Reserva CD (%)", 0, 50, int(round(100 * float(cfg.get("reserva_cd_pct", 0.20)))), 5,
             help="Parcela da aposta que fica no CD para reposição.") / 100.0
 
     todos_tam = ordem_tamanhos()
@@ -202,14 +203,6 @@ def render() -> None:
                              aproveitamento=aproveitamento,
                              reserva_cd_pct=reserva_pct)
 
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Venda projetada", f"{ap.venda_projetada:.0f}")
-        m2.metric("Aposta sugerida", f"{ap.aposta_sugerida:.0f}")
-        m3.metric("Reserva CD", f"{ap.reserva_cd:.0f}")
-        m4.metric("Semanas-equiv.", f"{ap.semanas_equivalentes:.1f}")
-        for aviso in ap.avisos:
-            st.warning(aviso)
-
         # insumos da distribuição: participação (com loja nova) + curva de tamanhos
         # + velocidade de cada loja (alimenta o teto de cobertura)
         skus = [v.cod_sku_pai for v in vels]
@@ -224,10 +217,9 @@ def render() -> None:
         pool = pool_suavizacao(pp, subgrupo=subgrupo, tecido=tecido,
                                fits=fits or None, desde_colecao=desde)
         fp_pool_fisico = fp[fp["cod_sku_pai"].isin(pool) & fisico]
-        participacoes = participacao_lojas(fp_pool_fisico) or participacao_lojas(fp_esp_fisico)
+        part_espelhos = participacao_lojas(fp_esp_fisico)
+        participacoes = participacao_lojas(fp_pool_fisico) or part_espelhos
         n_pool = int(fp_pool_fisico["cod_sku_pai"].nunique())
-        st.caption(f"Participação por loja suavizada com **{n_pool} modelos** do segmento "
-                   f"{subgrupo}/{tecido}" + (f" (fit: {', '.join(fits)})" if fits else "") + ".")
         # curva por bucket unificado (36≡XPP...), restrita à grade da aposta.
         # Tamanho da grade sem venda nos espelhos entra com peso mínimo para não
         # ficar de fora da matriz (a grade foi decisão de compra).
@@ -249,31 +241,56 @@ def render() -> None:
             "velocidades_loja": velocidade_de_cada_loja(fp, skus, curva, ctx["ecom_locs"]),
             "espelhos": skus,
             "suavizacao": {"n_modelos": n_pool, "fits": fits},
+            # lojas com venda dos PRÓPRIOS espelhos: nelas o dado real prevalece
+            # sobre a regra de loja espelho (config/lojas_espelho.yaml)
+            "lojas_com_espelho_proprio": sorted(part_espelhos),
+            "inputs": {
+                "sku_ref": sku_ref, "subgrupo": subgrupo, "tecido": tecido,
+                "cores": cores, "grade": grade_sel, "preco": preco,
+                "dt_entrada": str(dt_entrada), "colecao": colecao,
+                "aproveitamento": aproveitamento, "horizonte_semanas": horizonte,
+                "faixa": fx, "grupo_faixa": grupo_faixa,
+            },
+            "resultado": {
+                "venda_projetada": ap.venda_projetada, "venda_ecom": ap.venda_ecom,
+                "aposta_sugerida": ap.aposta_sugerida, "reserva_cd": ap.reserva_cd,
+                "semanas_equivalentes": ap.semanas_equivalentes,
+                "vel_por_loja_desaz": ap.vel_por_loja_desaz,
+            },
+            "avisos_projecao": list(ap.avisos),
         }
         st.session_state["projecao"] = projecao
+        st.session_state.pop("distribuicao", None)   # matriz antiga não vale mais
 
         # grava o cenário no histórico (inputs + resultado + insumos da distribuição)
         try:
             from core import historico
 
-            historico.salvar(projecao["resumo"], {
-                **projecao,
-                "inputs": {
-                    "sku_ref": sku_ref, "subgrupo": subgrupo, "tecido": tecido,
-                    "cores": cores, "grade": grade_sel, "preco": preco,
-                    "dt_entrada": str(dt_entrada), "colecao": colecao,
-                    "aproveitamento": aproveitamento, "horizonte_semanas": horizonte,
-                    "faixa": fx, "grupo_faixa": grupo_faixa,
-                },
-                "resultado": {
-                    "venda_projetada": ap.venda_projetada, "venda_ecom": ap.venda_ecom,
-                    "aposta_sugerida": ap.aposta_sugerida, "reserva_cd": ap.reserva_cd,
-                    "semanas_equivalentes": ap.semanas_equivalentes,
-                    "vel_por_loja_desaz": ap.vel_por_loja_desaz,
-                },
-            })
+            historico.salvar(projecao["resumo"], projecao)
             salvo = " Cenário salvo no Histórico."
         except Exception:
             salvo = " (não foi possível salvar no Histórico.)"
-        st.success("Projeção pronta. Abra a aba **Distribuição** para ver a matriz "
-                   "loja × tamanho." + salvo)
+        st.success("Projeção pronta — a distribuição está logo abaixo." + salvo)
+
+    # ------------------------------------------- projeção + distribuição (fluida)
+    proj = st.session_state.get("projecao")
+    if not proj:
+        return
+    st.divider()
+    st.subheader(f"Projeção — {proj['resumo']}")
+    res = proj.get("resultado") or {}
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Venda projetada", f"{res.get('venda_projetada', 0):.0f}")
+    m2.metric("Aposta sugerida", f"{res.get('aposta_sugerida', proj['aposta_total']):.0f}")
+    m3.metric("Reserva CD", f"{res.get('reserva_cd', 0):.0f}")
+    m4.metric("Semanas-equiv.", f"{res.get('semanas_equivalentes', 0):.1f}")
+    for aviso in proj.get("avisos_projecao") or []:
+        st.warning(aviso)
+    suav = proj.get("suavizacao") or {}
+    if suav.get("n_modelos"):
+        fits_s = suav.get("fits") or []
+        st.caption(f"Participação por loja suavizada com **{suav['n_modelos']} modelos** "
+                   "do segmento" + (f" (fit: {', '.join(fits_s)})" if fits_s else "") + ".")
+
+    st.divider()
+    distribuicao.secao(proj)

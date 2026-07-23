@@ -1,0 +1,13 @@
+# Lojas novas sem histórico próprio: participação = fator × participação da
+# loja espelho. Regra do negócio: vale enquanto a loja nova não tiver venda dos
+# produtos espelho selecionados — com dado próprio, o dado real prevalece.
+# Nomes conforme desc_nome da base de lojas (comparação ignora maiúsculas).
+Souq Casa Jardins:
+  espelho: Souq Sp Iguatemi Sao Paul
+  fator: 0.75
+Souq Natal Shopping:
+  espelho: Souq Rio Mar Fortaleza
+  fator: 0.50
+Souq Florianópolis:
+  espelho: SOUQ Balneário Camboriú
+  fator: 1.00

@@ -299,6 +299,36 @@ def opcoes_perfil_clima(caminho: Optional[str] = None) -> dict:
     }
 
 
+def espelhos_loja_nova(caminho: Optional[str] = None) -> dict:
+    """De-para de loja nova -> loja espelho, de `config/lojas_espelho.yaml`.
+
+    Retorna {sk_nova: (sk_espelho, fator, nome_nova, nome_espelho)} com as chaves
+    no formato das participações ('484.0'). Regra do negócio: loja nova sem venda
+    dos espelhos selecionados recebe fator × participação da loja espelho
+    (ex.: Casa Jardins = 75% do Iguatemi SP). Nome que não bater com a base de
+    lojas é ignorado em silêncio (o YAML é editável pelo negócio).
+    """
+    import yaml
+
+    arq = PROJ_ROOT / "config" / "lojas_espelho.yaml"
+    if not arq.exists():
+        return {}
+    with arq.open("r", encoding="utf-8") as fh:
+        cfg = yaml.safe_load(fh) or {}
+
+    lj = lojas_souq(caminho, incluir_ecom=False)
+    por_nome = {str(r["desc_nome"]).strip().casefold(): (str(float(r["sk_localidade"])), str(r["desc_nome"]))
+                for _, r in lj.iterrows()}
+
+    saida = {}
+    for nome_nova, regra in cfg.items():
+        nova = por_nome.get(str(nome_nova).strip().casefold())
+        esp = por_nome.get(str(regra.get("espelho", "")).strip().casefold())
+        if nova and esp:
+            saida[nova[0]] = (esp[0], float(regra.get("fator", 1.0)), nova[1], esp[1])
+    return saida
+
+
 def localidades_ecom(caminho: Optional[str] = None) -> set:
     """sk_localidade do(s) canal(is) Ecommerce da Souq (entram na aposta,
     mas não são destino físico de distribuição)."""

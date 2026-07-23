@@ -13,7 +13,7 @@ def render() -> None:
     st.caption("Aproveitamento e reserva CD são editados na própria aba Nova Aposta.")
     reserva_cd_pct = st.number_input(
         "Reserva CD padrão (%)", 0, 50,
-        int(round(100 * float(cfg.get("reserva_cd_pct", 0.20)))), 1,
+        int(round(100 * float(cfg.get("reserva_cd_pct", 0.20)))), 5,
         help="Valor inicial sugerido na aba Nova Aposta.") / 100.0
 
     st.subheader("Fim de período saudável")
@@ -23,14 +23,12 @@ def render() -> None:
     fim_inverno = c4.text_input("Coleções de INVERNO (dd/mm)", str(cfg.get("fim_periodo_inverno", "14/06")))
 
     st.subheader("Tetos da distribuição inicial")
-    c5, c6 = st.columns(2)
-    cobertura = c5.number_input(
+    st.caption("O máx. de peças por SKU-tamanho é editado na própria seção de "
+               "Distribuição (aba Nova Aposta).")
+    cobertura = st.number_input(
         "Cobertura máxima por loja (semanas)", 1.0, 26.0,
         float(cfg.get("cobertura_maxima_semanas", 6)), 1.0,
         help="Nenhuma loja recebe mais que N semanas da sua própria velocidade de venda.")
-    max_tam = c6.number_input(
-        "Máx. peças por SKU-tamanho/loja", 1, 50, int(cfg.get("max_por_tamanho_loja", 4)),
-        help="Teto por célula da matriz loja × tamanho. O excedente volta ao CD.")
 
     st.subheader("Escopo e sazonalidade")
     c7, c8 = st.columns(2)
@@ -47,7 +45,6 @@ def render() -> None:
             "fim_periodo_verao": fim_verao.strip(),
             "fim_periodo_inverno": fim_inverno.strip(),
             "cobertura_maxima_semanas": cobertura,
-            "max_por_tamanho_loja": int(max_tam),
             "min_amostra_curva": int(min_amostra),
             "desde_colecao": desde_colecao,
         })

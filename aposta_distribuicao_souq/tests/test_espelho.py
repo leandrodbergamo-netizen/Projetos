@@ -261,6 +261,52 @@ class TestParticipacaoLojaNova:
         assert out["9"] == pytest.approx(0.6 / 1.6)
 
 
+class TestLojaEspelhoNova:
+    """Regra do negócio: loja nova sem dado próprio usa fator × loja espelho
+    (ex.: Casa Jardins = 75% do Iguatemi SP)."""
+
+    ESPELHOS = {"casa": ("igua", 0.75, "Casa Jardins", "Iguatemi SP")}
+
+    def test_sem_dado_proprio_usa_fator_da_loja_espelho(self):
+        part_hist = {"igua": 0.4, "2": 0.6}
+        out = participacao_com_loja_nova(
+            part_hist, ["igua", "2", "casa"], {}, lojas_espelho=self.ESPELHOS,
+            com_dado_proprio=set())
+        # a renormalização preserva as proporções: casa = 75% do iguatemi
+        assert out["casa"] / out["igua"] == pytest.approx(0.75)
+
+    def test_com_venda_do_espelho_selecionado_o_dado_real_prevalece(self):
+        part_hist = {"igua": 0.4, "2": 0.5, "casa": 0.1}
+        out = participacao_com_loja_nova(
+            part_hist, ["igua", "2", "casa"], {}, lojas_espelho=self.ESPELHOS,
+            com_dado_proprio={"casa"})
+        assert out["casa"] == pytest.approx(0.1)       # já soma 1, não muda
+
+    def test_participacao_subestimada_e_substituida_pela_regra(self):
+        # loja aberta ha pouco aparece no historico com share minusculo (janela
+        # curta); sem venda dos espelhos selecionados, a regra corrige.
+        part_hist = {"igua": 0.4, "2": 0.58, "casa": 0.02}
+        out = participacao_com_loja_nova(
+            part_hist, ["igua", "2", "casa"], {}, lojas_espelho=self.ESPELHOS,
+            com_dado_proprio=set())
+        assert out["casa"] / out["igua"] == pytest.approx(0.75)
+
+    def test_sem_com_dado_proprio_mantem_comportamento_antigo(self):
+        # default (None): a regra só cobre quem está fora do histórico
+        part_hist = {"igua": 0.4, "2": 0.5, "casa": 0.1}
+        out = participacao_com_loja_nova(
+            part_hist, ["igua", "2", "casa"], {}, lojas_espelho=self.ESPELHOS)
+        assert out["casa"] == pytest.approx(0.1)
+
+    def test_espelho_sem_historico_cai_no_cluster(self):
+        part_hist = {"2": 1.0}
+        clusters = {"2": "Prata", "casa": "Prata"}
+        out = participacao_com_loja_nova(
+            part_hist, ["2", "casa"], clusters, lojas_espelho=self.ESPELHOS,
+            com_dado_proprio=set())
+        assert out["casa"] == pytest.approx(1.0 / 2.0)   # média das Prata
+
+
 class TestJanelaFullPrice:
     def test_janela_alarga_e_derruba_a_velocidade(self):
         # vendeu 10 un em 1 semana, mas ficou exposto 10 semanas ate liquidar:
@@ -325,30 +371,36 @@ class TestGradeCompleta:
                           max_por_tamanho_loja=None, garantir_grade_completa=garantir)
 
     def test_garantida_toda_loja_recebe_1_de_cada_tamanho(self):
-        # a garantia NAO corta loja: e um piso universal. L2 (10% de 30 = 3 pecas)
-        # recebe a grade de 5 mesmo assim, reduzindo o rateio da L1.
+        # a garantia e ADITIVA: nenhuma loja e cortada e o rateio das demais nao
+        # muda — as pecas que faltam para completar as grades SOMAM na aposta.
         r = self._distribui(True)
         for loja, tams in r.matriz.items():
             assert sum(tams.values()) >= 5, f"{loja} nao recebeu a grade"
             assert all(q >= 1 for q in tams.values()), f"{loja} ficou com tamanho zerado"
-        assert r.total_distribuido() == 30             # total preservado
+        assert r.acrescimo_garantia > 0
+        assert r.total_distribuido() == 30 + r.acrescimo_garantia
+        assert any("SOMOU" in a for a in r.avisos)
 
-    def test_piso_consome_a_reserva_do_cd_quando_falta(self):
-        # 2 lojas x 5 tamanhos = piso 10; disponivel = 10*(1-0.4) = 6 -> faltam 4,
-        # que saem da reserva do CD (4 de 4 disponiveis).
+    def test_garantia_nao_consome_a_reserva_do_cd(self):
+        # 2 lojas x 5 tamanhos = piso 10 > disponivel 6: o que falta e SOMADO a
+        # aposta; a reserva do CD (40% de 10 = 4) permanece intacta.
         r = self._distribui(True, aposta=10, reserva=0.40)
-        assert sum(r.matriz["L1"].values()) == 5 and sum(r.matriz["L2"].values()) == 5
-        assert r.reserva_cd == pytest.approx(0.0)      # reserva efetiva reportada
-        assert any("Reserva CD cedeu" in a for a in r.avisos)
+        assert sum(r.matriz["L1"].values()) >= 5 and sum(r.matriz["L2"].values()) >= 5
+        assert r.reserva_cd == pytest.approx(4.0)
+        assert not any("Reserva CD cedeu" in a for a in r.avisos)
 
-    def test_aposta_insuficiente_completa_as_maiores_e_avisa(self):
-        # aposta 7 < piso 10 mesmo sem reserva: so 1 loja (a maior) leva grade
+    def test_aposta_pequena_nenhuma_loja_fica_sem_grade(self):
+        # aposta 7 < piso 10: mesmo assim TODAS as lojas levam a grade completa,
+        # com o deficit somado a aposta (nunca "ficaram sem grade").
         r = self._distribui(True, aposta=7)
-        assert sum(r.matriz["L1"].values()) >= 5
-        assert any("ficaram sem grade" in a for a in r.avisos)
+        for loja, tams in r.matriz.items():
+            assert all(q >= 1 for q in tams.values()), f"{loja} com tamanho zerado"
+        assert not any("ficaram sem grade" in a for a in r.avisos)
+        assert r.total_distribuido() == 7 + r.acrescimo_garantia
 
     def test_desligada_permite_grade_incompleta(self):
         r = self._distribui(False)
+        assert r.acrescimo_garantia == 0
         assert sum(r.matriz["L2"].values()) > 0        # loja pequena permanece
         assert any(q == 0 for q in r.matriz["L2"].values())   # com tamanho faltando
 

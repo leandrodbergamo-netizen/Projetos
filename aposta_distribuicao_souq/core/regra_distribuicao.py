@@ -15,7 +15,7 @@ Convenções:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import floor, isclose
+from math import floor
 from typing import Dict, List, Optional
 
 
@@ -188,25 +188,6 @@ def arredondar_maior_resto(valores: Dict[str, float], total_alvo: Optional[int] 
     return resultado
 
 
-def _um_de_cada_tamanho(aberto: Dict[str, int]) -> Dict[str, int]:
-    """Garante 1+ peça em cada tamanho, tirando dos tamanhos mais fartos.
-
-    Preserva o total da loja. Se a loja tem menos peças que tamanhos, não há como
-    completar a grade — devolve como está (o corte é feito antes, pela grade
-    mínima efetiva).
-    """
-    m = dict(aberto)
-    if not m or sum(m.values()) < len(m):
-        return m
-    for tam in [t for t, q in m.items() if q < 1]:
-        doador = max(m, key=lambda k: m[k])
-        if m[doador] <= 1:
-            break
-        m[doador] -= 1
-        m[tam] += 1
-    return m
-
-
 # --------------------------------------------------------------------------- #
 # Pipeline completo -> matriz loja x tamanho
 # --------------------------------------------------------------------------- #
@@ -217,6 +198,7 @@ class ResultadoDistribuicao:
     distribuicao_loja: Dict[str, int]          # {loja: unidades}
     matriz: Dict[str, Dict[str, int]]          # {loja: {tamanho: unidades}}
     sobra_para_cd: int                         # não distribuído (volta ao CD)
+    acrescimo_garantia: int = 0                # un SOMADAS à aposta pela grade garantida
     avisos: List[str] = field(default_factory=list)
 
     def total_distribuido(self) -> int:
@@ -246,11 +228,11 @@ def distribuir(
     - `max_por_tamanho_loja` (4): nenhuma loja recebe mais que 4 peças do mesmo
       SKU-tamanho. O que passa do teto volta ao CD.
     - `garantir_grade_completa`: **todas** as lojas-alvo recebem ao menos 1 peça
-      de cada tamanho da curva (piso = nº de tamanhos). O piso não corta loja —
-      ele é atendido primeiro, reduzindo o rateio proporcional das demais e, se o
-      disponível não bastar, consumindo a reserva do CD (a reserva efetiva é
-      reportada em `reserva_cd` e num aviso). Desligado, a loja pode ficar com
-      grade incompleta (ex.: só M e G).
+      de cada tamanho da curva. A garantia é ADITIVA: o rateio proporcional roda
+      normalmente e as peças que faltam para completar as grades são SOMADAS à
+      aposta (`acrescimo_garantia` + aviso) — não reduzem o rateio das demais
+      lojas nem consomem a reserva do CD. Desligado, a loja pode ficar com grade
+      incompleta (ex.: só M e G).
 
     A sobra não distribuível (teto/grade) é reportada como `sobra_para_cd`.
     """
@@ -264,43 +246,8 @@ def distribuir(
     else:
         avisos.append("Sem velocidades por loja: teto de cobertura não aplicado (fallback).")
 
-    tamanhos_ativos = [t for t, p in (curva_tamanhos or {}).items() if p > 0]
-    piso_loja = len(tamanhos_ativos) if (garantir_grade_completa and tamanhos_ativos) else 0
-
-    if piso_loja and participacoes:
-        # O piso (1 peça de cada tamanho) é atendido PRIMEIRO, para todas as
-        # lojas-alvo; o rateio proporcional distribui apenas o que sobra dele.
-        piso_total = piso_loja * len(participacoes)
-        if disponivel < piso_total:
-            transfer = min(piso_total - disponivel, reserva)
-            reserva -= transfer
-            disponivel += transfer
-            pct_efetiva = 100 * reserva / aposta_total if aposta_total > 0 else 0
-            avisos.append(
-                f"Reserva CD cedeu {transfer:.0f} un para garantir 1 peça por tamanho "
-                f"em todas as lojas (reserva efetiva: {pct_efetiva:.0f}%)."
-            )
-        lojas_piso = list(participacoes)
-        if disponivel < piso_total:
-            # nem com a reserva dá para todas: completa a grade das maiores
-            # participações e avisa quantas ficaram de fora.
-            n_completas = int(disponivel // piso_loja)
-            lojas_piso = sorted(participacoes, key=participacoes.get, reverse=True)[:n_completas]
-            avisos.append(
-                f"Aposta insuficiente para 1 peça por tamanho em todas: "
-                f"{len(participacoes) - len(lojas_piso)} loja(s) ficaram sem grade."
-            )
-        # teto de cobertura vale para o total da loja: o extra desconta o piso
-        tetos_extra = None
-        if tetos is not None:
-            tetos_extra = {l: max(t - piso_loja, 0.0) for l, t in tetos.items()}
-        extra = distribuir_por_participacao(
-            max(disponivel - piso_loja * len(lojas_piso), 0.0), participacoes, tetos_extra)
-        aloc = {l: (piso_loja if l in lojas_piso else 0.0) + extra.get(l, 0.0)
-                for l in participacoes}
-    else:
-        aloc = distribuir_por_participacao(disponivel, participacoes, tetos)
-        aloc = aplicar_grade_minima(aloc, grade_minima, participacoes)
+    aloc = distribuir_por_participacao(disponivel, participacoes, tetos)
+    aloc = aplicar_grade_minima(aloc, grade_minima, participacoes)
 
     # arredonda a distribuição por loja (maior resto sobre o total efetivamente alocado)
     total_alocado = int(floor(sum(aloc.values()) + 1e-9))
@@ -315,8 +262,6 @@ def distribuir(
             continue
         continuo = abrir_por_tamanho(qtd, curva_tamanhos)
         aberto = arredondar_maior_resto(continuo, qtd)
-        if garantir_grade_completa:
-            aberto = _um_de_cada_tamanho(aberto)
         if max_por_tamanho_loja:
             for tam, q in list(aberto.items()):
                 if q > max_por_tamanho_loja:
@@ -324,14 +269,14 @@ def distribuir(
                     aberto[tam] = max_por_tamanho_loja
         matriz[loja] = aberto
 
-    # o teto por tamanho reduz o total da loja: refaz a partir da matriz
-    distrib_int = {loja: sum(tams.values()) for loja, tams in matriz.items()}
     if cortado_teto:
         avisos.append(
             f"{cortado_teto} unidade(s) acima do teto de {max_por_tamanho_loja} "
             "por SKU-tamanho/loja voltaram ao CD."
         )
 
+    # o teto por tamanho reduz o total da loja: sobra medida ANTES da garantia
+    distrib_int = {loja: sum(tams.values()) for loja, tams in matriz.items()}
     sobra = int(round(disponivel)) - sum(distrib_int.values())
     if sobra > cortado_teto:
         avisos.append(
@@ -339,12 +284,32 @@ def distribuir(
             "retornaram ao CD."
         )
 
+    # garantia de grade ADITIVA: completa 1 peça por tamanho em TODAS as lojas,
+    # somando as peças que faltam à aposta (não tira de ninguém, não usa reserva)
+    acrescimo = 0
+    tamanhos_ativos = [t for t, p in (curva_tamanhos or {}).items() if p > 0]
+    if garantir_grade_completa and tamanhos_ativos and participacoes:
+        for loja in participacoes:
+            aberto = matriz.setdefault(loja, {t: 0 for t in curva_tamanhos})
+            for tam in tamanhos_ativos:
+                if aberto.get(tam, 0) < 1:
+                    acrescimo += 1 - aberto.get(tam, 0)
+                    aberto[tam] = 1
+        if acrescimo:
+            avisos.append(
+                f"Garantia de grade SOMOU {acrescimo} un à aposta "
+                f"({aposta_total:.0f} → {aposta_total + acrescimo:.0f}) para dar "
+                f"1 peça de cada um dos {len(tamanhos_ativos)} tamanhos a todas as lojas."
+            )
+        distrib_int = {loja: sum(tams.values()) for loja, tams in matriz.items()}
+
     return ResultadoDistribuicao(
         reserva_cd=reserva,
         disponivel_lojas=disponivel,
         distribuicao_loja=distrib_int,
         matriz=matriz,
         sobra_para_cd=max(sobra, 0),
+        acrescimo_garantia=int(acrescimo),
         avisos=avisos,
     )
 
@@ -362,19 +327,27 @@ def participacao_com_loja_nova(
     part_hist: Dict[str, float],
     lojas_alvo: List[str],
     cluster_por_loja: Dict[str, tuple],
+    lojas_espelho: Optional[Dict[str, tuple]] = None,
+    com_dado_proprio: Optional[set] = None,
 ) -> Dict[str, float]:
-    """Participação para TODAS as lojas-alvo, extrapolando as novas pelo cluster.
+    """Participação para TODAS as lojas-alvo, extrapolando as novas.
 
-    - `part_hist`: participação observada do(s) espelho(s) por loja (só lojas com
-      histórico; SEM Ecom).
+    - `part_hist`: participação observada por loja (só lojas com histórico; SEM Ecom).
     - `lojas_alvo`: lojas físicas ativas que devem receber (inclui novas).
     - `cluster_por_loja`: mapa loja -> chave de cluster. A chave pode ser uma
       tupla (ex.: (Perfil, Clima)); nesse caso o fallback afrouxa da chave cheia
       para as parciais — necessário porque combinações reais podem não existir
       (ex.: não há loja Perfil AB com clima Frio).
+    - `lojas_espelho`: {loja_nova: (loja_espelho, fator, ...)} — regra do negócio
+      para lojas recém-abertas (ex.: Casa Jardins = 75% do Iguatemi SP).
+    - `com_dado_proprio`: lojas cuja venda dos produtos selecionados é confiável.
+      Se informado, a loja espelho vale para as configuradas FORA desse conjunto
+      (loja aberta há pouco aparece no histórico com participação subestimada);
+      se None, a loja espelho só cobre quem não está em `part_hist`.
 
-    Loja nova herda a média das lojas com a mesma chave; sem par comparável,
-    afrouxa a chave; sem nada, usa a média geral. No fim renormaliza para somar 1.
+    Precedência da loja nova: loja espelho (fator × participação do espelho) →
+    dado próprio → média do cluster (afrouxando a chave) → média geral.
+    No fim renormaliza para somar 1 — as proporções relativas são preservadas.
     """
     if not part_hist:
         # sem histórico algum: distribuição uniforme entre as lojas-alvo
@@ -400,6 +373,13 @@ def participacao_com_loja_nova(
 
     resultado: Dict[str, float] = {}
     for loja in lojas_alvo:
+        regra = (lojas_espelho or {}).get(loja)
+        tem_proprio = (loja in com_dado_proprio) if com_dado_proprio is not None \
+            else (loja in part_hist)
+        if regra and not tem_proprio and regra[0] in part_hist:
+            espelho, fator = regra[0], regra[1]
+            resultado[loja] = part_hist[espelho] * fator
+            continue
         if loja in part_hist:
             resultado[loja] = part_hist[loja]
             continue

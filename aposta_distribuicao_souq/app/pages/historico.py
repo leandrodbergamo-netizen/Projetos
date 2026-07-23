@@ -87,15 +87,18 @@ def render() -> None:
         sel = df.iloc[idx[0]]
         with st.expander("Detalhes do cenário", expanded=True):
             _detalhes(sel["payload"])
-        if st.button("Reabrir na Distribuição", type="primary"):
+        if st.button("Reabrir aposta + distribuição", type="primary"):
             payload = sel["payload"]
             st.session_state["projecao"] = {
                 k: payload[k] for k in ("resumo", "aposta_total", "reserva_cd_pct",
                                         "participacoes_hist", "curva_tamanhos",
-                                        "velocidades_loja", "espelhos")
+                                        "velocidades_loja", "espelhos", "suavizacao",
+                                        "lojas_com_espelho_proprio", "inputs",
+                                        "resultado", "avisos_projecao")
                 if k in payload
             }
-            st.session_state["pagina"] = "Distribuição"
+            st.session_state.pop("distribuicao", None)
+            st.session_state["pagina"] = "Nova Aposta"
             st.rerun()
 
     b1, b2 = st.columns(2)

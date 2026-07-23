@@ -1,33 +1,30 @@
-"""Distribuição — matriz loja × tamanho.
+"""Distribuição — seção embutida na aba Nova Aposta (matriz loja × tamanho).
 
-Usa a aposta/participações/velocidades calculadas na aba Nova Aposta. O parque-alvo
-pode ser restringido por Perfil Econômico e Clima; lojas novas (sem histórico do
-espelho) herdam a participação média das lojas com mesmo Perfil+Clima. Ecom entra
-na aposta, mas não é destino físico.
-
-Tetos da distribuição inicial (Configurações): cobertura máxima em semanas por
-loja e máximo de peças do mesmo SKU-tamanho por loja.
+Usa a aposta/participações/velocidades da projeção atual. O parque-alvo pode ser
+restringido por Perfil Econômico e Clima; loja nova usa a loja espelho do
+`config/lojas_espelho.yaml` (ex.: Casa Jardins = 75% do Iguatemi SP) e, sem
+regra, herda a média do cluster Perfil+Clima. Ecom entra na aposta, mas não é
+destino físico. O resultado fica na tela até a próxima projeção.
 """
 import pandas as pd
 import streamlit as st
 
 from core.config_utils import load_config
-from core.dados import cluster_por_loja, lojas_alvo_souq, opcoes_perfil_clima
+from core.dados import (cluster_por_loja, espelhos_loja_nova, lojas_alvo_souq,
+                        opcoes_perfil_clima)
 from core.regra_distribuicao import distribuir, participacao_com_loja_nova
 
 TODOS = "TODOS"
 
 
 def _mostra_resultado(resultado, lojas_df, reserva_planejada=None, aposta_total=None):
+    acrescimo = getattr(resultado, "acrescimo_garantia", 0)
     m1, m2, m3, m4 = st.columns(4)
-    # a garantia de grade pode consumir a reserva do CD: o delta mostra quanto
-    delta = None
-    if reserva_planejada is not None and abs(resultado.reserva_cd - reserva_planejada) >= 0.5:
-        delta = f"{resultado.reserva_cd - reserva_planejada:.0f} un vs planejado"
+    aposta_final = (aposta_total or 0) + acrescimo
+    m1.metric("Aposta final", f"{aposta_final:.0f}",
+              delta=f"+{acrescimo} un pela grade garantida" if acrescimo else None)
     pct = f" ({100 * resultado.reserva_cd / aposta_total:.0f}%)" if aposta_total else ""
-    m1.metric("Reserva CD" + pct, f"{resultado.reserva_cd:.0f}", delta=delta,
-              delta_color="inverse" if delta else "off")
-    m2.metric("Disponível lojas", f"{resultado.disponivel_lojas:.0f}")
+    m2.metric("Reserva CD" + pct, f"{resultado.reserva_cd:.0f}")
     m3.metric("Distribuído", f"{resultado.total_distribuido()}")
     m4.metric("Sobra p/ CD", f"{resultado.sobra_para_cd}")
     for aviso in resultado.avisos:
@@ -48,25 +45,23 @@ def _mostra_resultado(resultado, lojas_df, reserva_planejada=None, aposta_total=
     st.session_state["ultima_distribuicao"] = matriz
 
 
-def render() -> None:
-    st.title("Distribuição")
-    st.caption("Reserva CD · participação por loja (loja nova herda de Perfil+Clima) · "
-               "teto de cobertura · teto por SKU-tamanho. Ecom entra na aposta, não na matriz física.")
-
-    proj = st.session_state.get("projecao")
-    if not proj:
-        st.info("Nenhuma projeção ainda. Vá à aba **Nova Aposta**, escolha os espelhos e clique em "
-                "**Projetar aposta**.")
-        return
+def secao(proj: dict) -> None:
+    """Renderiza a seção de distribuição para a projeção atual."""
+    st.subheader("Distribuição")
+    st.caption("Participação por loja (loja nova usa a loja espelho ou o cluster "
+               "Perfil+Clima) · teto de cobertura · teto por SKU-tamanho. "
+               "Ecom entra na aposta, não na matriz física.")
 
     cfg = load_config()
-    st.write(f"Projeção atual: **{proj['resumo']}**")
 
     # ----------------------------------------------- parque-alvo (Perfil/Clima)
     disp = opcoes_perfil_clima()
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     perfis = c1.multiselect("Perfil Econômico", [TODOS] + disp["perfis"], default=[TODOS])
     climas = c2.multiselect("Clima", [TODOS] + disp["climas"], default=[TODOS])
+    max_tam = int(c3.number_input(
+        "Máx. peças por SKU-tamanho/loja", 1, 50, int(cfg.get("max_por_tamanho_loja", 4)),
+        help="Teto por célula da matriz loja × tamanho. O excedente volta ao CD."))
     # "TODOS" (ou seleção vazia) = sem restrição
     perfis = None if (TODOS in perfis or not perfis) else perfis
     climas = None if (TODOS in climas or not climas) else climas
@@ -77,8 +72,25 @@ def render() -> None:
         return
 
     lojas_alvo = [str(float(x)) for x in lojas_df["sk_localidade"]]
-    part = participacao_com_loja_nova(proj["participacoes_hist"], lojas_alvo, cluster_por_loja())
+    espelhos = espelhos_loja_nova()
+    ldp = proj.get("lojas_com_espelho_proprio")
+    com_dado = set(ldp) if ldp is not None else None
+    part = participacao_com_loja_nova(
+        proj["participacoes_hist"], lojas_alvo, cluster_por_loja(),
+        lojas_espelho=espelhos, com_dado_proprio=com_dado)
     novas = [l for l in lojas_alvo if l not in proj["participacoes_hist"]]
+
+    # quais lojas estão usando a regra de loja espelho nesta distribuição
+    usando_espelho = []
+    for loja, (esp, fator, nome_nova, nome_esp) in espelhos.items():
+        if loja not in lojas_alvo or esp not in proj["participacoes_hist"]:
+            continue
+        tem_proprio = (loja in com_dado) if com_dado is not None \
+            else (loja in proj["participacoes_hist"])
+        if not tem_proprio:
+            usando_espelho.append(f"{nome_nova} ← {fator:.0%} de {nome_esp}")
+    if usando_espelho:
+        st.caption("Lojas novas por loja espelho: " + " · ".join(usando_espelho) + ".")
 
     m1, m2, m3 = st.columns(3)
     m1.metric("Aposta total", f"{proj['aposta_total']:.0f}")
@@ -86,15 +98,14 @@ def render() -> None:
     m3.metric("Novas (extrapoladas)", f"{len(novas)}")
 
     cobertura = float(cfg.get("cobertura_maxima_semanas", 6))
-    max_tam = int(cfg.get("max_por_tamanho_loja", 4))
     n_tam = len([t for t, p in (proj["curva_tamanhos"] or {}).items() if p > 0])
     garantir = st.checkbox(
         "Garantir ao menos 1 peça por tamanho", value=False,
-        help=f"Piso universal: TODAS as lojas-alvo recebem 1 de cada um dos {n_tam} tamanhos "
-             "({n} peças no mínimo). O piso é atendido primeiro — reduz o rateio das demais "
-             "e, se faltar, consome a reserva do CD (o indicador mostra a reserva efetiva).".format(n=n_tam))
-    st.caption(f"Tetos (Configurações): máx. **{cobertura:.0f} semanas** de cobertura por loja e "
-               f"máx. **{max_tam} peças** do mesmo SKU-tamanho por loja.")
+        help=f"TODAS as lojas-alvo recebem 1 de cada um dos {n_tam} tamanhos. As peças "
+             "que faltarem são SOMADAS à aposta (não reduzem o rateio das demais lojas "
+             "nem a reserva do CD); um aviso mostra o acréscimo.")
+    st.caption(f"Teto de cobertura (Configurações): máx. **{cobertura:.0f} semanas** "
+               "da velocidade da própria loja.")
 
     if st.button("Distribuir", type="primary"):
         resultado = distribuir(
@@ -107,6 +118,11 @@ def render() -> None:
             max_por_tamanho_loja=max_tam,
             garantir_grade_completa=garantir,
         )
-        reserva_planejada = proj["aposta_total"] * proj.get("reserva_cd_pct", 0.20)
-        _mostra_resultado(resultado, lojas_df, reserva_planejada=reserva_planejada,
+        st.session_state["distribuicao"] = {"resumo": proj["resumo"], "resultado": resultado}
+
+    # resultado persiste na tela (some se a projeção mudar)
+    d = st.session_state.get("distribuicao")
+    if d and d.get("resumo") == proj["resumo"]:
+        _mostra_resultado(d["resultado"], lojas_df,
+                          reserva_planejada=proj["aposta_total"] * proj.get("reserva_cd_pct", 0.20),
                           aposta_total=proj["aposta_total"])
