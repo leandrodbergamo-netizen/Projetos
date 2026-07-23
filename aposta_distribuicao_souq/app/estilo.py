@@ -20,17 +20,18 @@ MUDO = "#8F8C7B"
 
 CSS = f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Marcellus&family=Instrument+Sans:wght@400;500;600;700&display=swap');
 
 html, body, [class*="st-"] {{ font-family: 'Instrument Sans', sans-serif; }}
 /* a regra acima não pode atropelar a fonte de ícones do Streamlit */
 [data-testid="stIconMaterial"], span[class*="material-symbols"] {{
   font-family: 'Material Symbols Rounded' !important;
 }}
-h1, h2, h3 {{ font-family: 'Instrument Serif', serif !important; font-weight: 400 !important; }}
-h1 {{ font-size: 40px !important; }}
-h2 {{ font-size: 26px !important; }}
-h3 {{ font-size: 22px !important; }}
+/* Marcellus: serif romana, o desenho mais próximo do letreiro da loja */
+h1, h2, h3 {{ font-family: 'Marcellus', serif !important; font-weight: 400 !important; }}
+h1 {{ font-size: 38px !important; }}
+h2 {{ font-size: 25px !important; }}
+h3 {{ font-size: 21px !important; }}
 
 /* ---------------- sidebar: palha, borda e pills verdes ---------------- */
 [data-testid="stSidebar"] {{
@@ -53,16 +54,23 @@ h3 {{ font-size: 22px !important; }}
 [data-testid="stSidebar"] .stButton button[kind="primary"]:hover {{ background: {VERDE}; }}
 
 /* ---------------- botões da área principal ---------------- */
-.stButton button, .stDownloadButton button {{
+/* hierarquia: primário terracota preenchido; secundário com contorno verde e
+   fundo tingido (nada de branco), invertendo para verde cheio no hover */
+[data-testid="stMain"] .stButton button, [data-testid="stMain"] .stDownloadButton button {{
   border-radius: 8px;
   font-size: 14.5px;
 }}
-.stButton button[kind="primary"] {{ font-weight: 600; }}
-.stButton button[kind="primary"]:hover {{
+[data-testid="stMain"] .stButton button[kind^="primary"] {{ font-weight: 600; }}
+[data-testid="stMain"] .stButton button[kind^="primary"]:hover {{
   background-color: {TERRACOTA_HOVER}; border-color: {TERRACOTA_HOVER};
 }}
-.stButton button[kind="secondary"], .stDownloadButton button {{
-  border: 1px solid {BORDA_INPUT}; color: {TEXTO_2}; background: #FFFFFF;
+[data-testid="stMain"] .stButton button[kind^="secondary"],
+[data-testid="stMain"] .stDownloadButton button {{
+  border: 1.5px solid {VERDE}; color: {VERDE}; background: #EFEDE3; font-weight: 600;
+}}
+[data-testid="stMain"] .stButton button[kind^="secondary"]:hover,
+[data-testid="stMain"] .stDownloadButton button:hover {{
+  background: {VERDE}; color: {FUNDO}; border-color: {VERDE};
 }}
 
 /* ---------------- inputs ---------------- */
@@ -98,14 +106,14 @@ h3 {{ font-size: 22px !important; }}
 }}
 .kpi-escuro .kpi-rotulo {{ color: #B9BCA9; }}
 .kpi-valor {{
-  font-family: 'Instrument Serif', serif; font-size: 42px; line-height: 1.15; color: {TINTA};
+  font-family: 'Marcellus', serif; font-size: 40px; line-height: 1.15; color: {TINTA};
 }}
 .kpi-escuro .kpi-valor {{ color: {FUNDO}; }}
 .kpi-sub {{ font-size: 12px; color: {MUDO}; }}
 .kpi-escuro .kpi-sub {{ color: #B9BCA9; }}
 
-.marca-souq {{ font-family: 'Instrument Serif', serif; font-size: 26px; line-height: 1.1;
-              color: {TINTA}; letter-spacing: .08em; }}
+.marca-souq {{ font-family: 'Marcellus', serif; font-size: 24px; line-height: 1.1;
+              color: {TINTA}; letter-spacing: .18em; text-transform: uppercase; }}
 .marca-sub {{
   font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
   color: {MUDO}; margin-bottom: 10px;
@@ -120,7 +128,7 @@ h3 {{ font-size: 22px !important; }}
 
 .swatch {{
   width: 56px; height: 70px; border-radius: 6px; display: flex; align-items: center;
-  justify-content: center; color: #fff; font-family: 'Instrument Serif', serif;
+  justify-content: center; color: #fff; font-family: 'Marcellus', serif;
   font-size: 22px; background: linear-gradient(160deg, #C8A98E, {TERRACOTA});
 }}
 .foto-espelho {{ width: 64px; border-radius: 6px; display: block; }}
