@@ -374,6 +374,12 @@ def _projetar(cfg, pp, fp, cand, curva, ctx, escolhidos, horizonte, janelas,
     except Exception:
         st.session_state["flash_salvo"] = False
 
+    # projeção concluída (e salva): limpa 100% dos campos para a próxima aposta.
+    # A projeção/distribuição atual segue viva nas etapas 3-4 via `projecao`.
+    st.session_state["formulario"] = {}
+    st.session_state["espelhos_marcados"] = []
+    st.session_state.pop("sel_todos_esp", None)
+
 
 # --------------------------------------------------------------------------- #
 # Etapa 3 — Projeção (exibição)
@@ -413,9 +419,10 @@ def _etapa_projecao() -> None:
         estilo.barras_contribuicao(proj["contribuicoes"])
 
     st.markdown("")
-    b1, b2, _ = st.columns([1.2, 1.6, 3.2])
-    if b1.button("← Espelhos", width="stretch"):
-        st.session_state["etapa"] = 2
+    b1, b2, _ = st.columns([1.4, 1.6, 3])
+    if b1.button("← Novo produto", width="stretch",
+                 help="Os campos já estão limpos para a próxima aposta."):
+        st.session_state["etapa"] = 1
         st.rerun()
     if b2.button("Distribuir →", type="primary", width="stretch"):
         st.session_state["etapa"] = 4
@@ -439,7 +446,10 @@ def render() -> None:
 
     t1, t2 = st.columns([2.2, 4], vertical_alignment="bottom")
     t1.title("Nova aposta")
-    contexto = _contexto_form(form) if etapa > 1 else ""
+    contexto = ""
+    if etapa > 1:
+        # com o formulário já limpo (pós-projeção), o contexto vem da projeção
+        contexto = _contexto_form(form) or (proj["resumo"] if proj else "")
     if contexto:
         t2.caption(f"Etapa {etapa} de 4 · {contexto}")
 
