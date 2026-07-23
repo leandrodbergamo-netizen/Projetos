@@ -82,12 +82,13 @@ def _mostra_resultado(resultado, lojas_df, proj, aposta_total=None, chave_editor
 
             matriz_dict = {str(i): {str(c): int(v) for c, v in linha.items()}
                            for i, linha in editada.iterrows()}
-            historico.salvar(proj["resumo"] + " · distribuição", {
-                **proj,
-                "distribuicao_editada": matriz_dict,
-                "aposta_final": float(aposta_final + delta),
-                "distribuido_editado": tot_editado,
-            })
+            with st.spinner("Salvando no Histórico…"):
+                historico.salvar(proj["resumo"] + " · distribuição", {
+                    **proj,
+                    "distribuicao_editada": matriz_dict,
+                    "aposta_final": float(aposta_final + delta),
+                    "distribuido_editado": tot_editado,
+                })
             st.session_state["flash_matriz"] = "Distribuição salva no Histórico ✓"
         except Exception:
             st.session_state["flash_matriz"] = "Não foi possível salvar no Histórico."
@@ -166,7 +167,8 @@ def secao(proj: dict) -> None:
 
     if st.button(f"Distribuir {aposta_usada:.0f} un em {len(lojas_alvo)} lojas",
                  type="primary"):
-        resultado = distribuir(
+        with st.spinner("Distribuindo entre as lojas…"):
+            resultado = distribuir(
             aposta_total=aposta_usada,
             participacoes=part,
             curva_tamanhos=proj["curva_tamanhos"],

@@ -124,6 +124,7 @@ def render() -> None:
     b1.download_button(f"Exportar selecionados ({len(idx)}) — CSV", csv,
                        file_name="historico_apostas.csv", mime="text/csv")
     if b2.button(f"Excluir selecionados ({len(idx)})"):
-        for i in idx:
-            historico.excluir(df.iloc[i]["id"])
+        with st.spinner("Excluindo cenários…"):
+            for i in idx:
+                historico.excluir(df.iloc[i]["id"])
         st.rerun()

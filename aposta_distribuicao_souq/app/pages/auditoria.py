@@ -93,8 +93,11 @@ def render() -> None:
     with st.spinner("Carregando bases…"):
         produtos_prep()
         vendas_fp()
-    _curva()
+    with st.spinner("Montando a curva sazonal…"):
+        _curva()
     st.divider()
-    _cobertura()
+    with st.spinner("Medindo a cobertura das bases…"):
+        _cobertura()
     st.divider()
-    _deparas()
+    with st.spinner("Montando os de-paras…"):
+        _deparas()

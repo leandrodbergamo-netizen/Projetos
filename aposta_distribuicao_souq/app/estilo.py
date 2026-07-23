@@ -84,6 +84,14 @@ h3 {{ font-size: 21px !important; }}
 [data-baseweb="tag"] span {{ color: {FUNDO} !important; }}
 [data-baseweb="tag"] svg {{ fill: #C6C9B8 !important; }}
 
+/* indicador global de execução: qualquer ação mostra a pill verde no topo */
+[data-testid="stStatusWidget"] {{
+  background: {VERDE}; border-radius: 99px; padding: 4px 14px;
+}}
+[data-testid="stStatusWidget"], [data-testid="stStatusWidget"] * {{
+  color: #F3F1EB !important; fill: #F3F1EB !important; font-weight: 600;
+}}
+
 /* ---------------- avisos no estilo do protótipo ---------------- */
 [data-testid="stAlert"] {{
   background: #EEECE2; border-left: 3px solid #C7C4B2;

@@ -212,11 +212,12 @@ def _etapa_espelhos(cfg, pp, fp) -> None:
                    ("horizonte", f"{horizonte} semanas"),
                    ("lojas-alvo", str(ctx["n_lojas_alvo"]))])
 
-    cand, soft = candidatos_espelho(
-        pp, subgrupo=form["subgrupo"], faixa=form.get("faixa"), tecido=form["tecido"],
-        cor_grupo=form.get("cores") or None, grade=form.get("grade") or None,
-        desde_colecao=desde)
-    curva, nivel = curva_por(fp, subgrupo=form["subgrupo"], material=form["tecido"])
+    with st.spinner("Buscando espelhos comparáveis…"):
+        cand, soft = candidatos_espelho(
+            pp, subgrupo=form["subgrupo"], faixa=form.get("faixa"), tecido=form["tecido"],
+            cor_grupo=form.get("cores") or None, grade=form.get("grade") or None,
+            desde_colecao=desde)
+        curva, nivel = curva_por(fp, subgrupo=form["subgrupo"], material=form["tecido"])
     if cand.empty:
         st.warning("Nenhum candidato a espelho com esses filtros. Volte e reduza a grade, "
                    "afrouxe a cor ou ajuste o preço.")
