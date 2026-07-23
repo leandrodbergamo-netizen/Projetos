@@ -90,6 +90,9 @@ def _deparas() -> None:
 
 def render() -> None:
     st.title("Auditoria")
+    with st.spinner("Carregando bases…"):
+        produtos_prep()
+        vendas_fp()
     _curva()
     st.divider()
     _cobertura()

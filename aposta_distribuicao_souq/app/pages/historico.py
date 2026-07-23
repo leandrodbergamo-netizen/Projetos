@@ -70,7 +70,8 @@ def render() -> None:
                "excluir em lote.")
 
     try:
-        df = historico.listar()
+        with st.spinner("Lendo o histórico…"):
+            df = historico.listar()
     except Exception as erro:
         st.error(f"Não consegui ler o histórico: `{str(erro)[:200]}`")
         return

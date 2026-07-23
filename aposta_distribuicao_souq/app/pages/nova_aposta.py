@@ -212,8 +212,9 @@ def _etapa_espelhos(cfg, pp, fp) -> None:
     janelas = janelas_full_price(pp)
     hoje = pd.Timestamp(date.today())
     dias_ativo = int(cfg.get("dias_para_considerar_ativo", 60))
-    cand = enriquecer_velocidade(cand, fp, curva, ctx["ecom_locs"], janelas=janelas,
-                                 ativo_ate=hoje, dias_ativo=dias_ativo)
+    with st.spinner("Calculando a velocidade dos candidatos…"):
+        cand = enriquecer_velocidade(cand, fp, curva, ctx["ecom_locs"], janelas=janelas,
+                                     ativo_ate=hoje, dias_ativo=dias_ativo)
     if cand.empty:
         st.warning(f"Os {total_bruto} candidatos encontrados nunca venderam full price. "
                    "Volte e afrouxe os filtros.")
@@ -260,8 +261,9 @@ def _etapa_espelhos(cfg, pp, fp) -> None:
     plural = "" if len(marcados) == 1 else "s"
     if b2.button(f"Projetar aposta ({len(marcados)} espelho{plural}) →", type="primary",
                  width="stretch", disabled=not marcados):
-        _projetar(cfg, pp, fp, cand, curva, ctx, sorted(marcados), horizonte, janelas,
-                  hoje, dias_ativo, desde, fim)
+        with st.spinner("Projetando a aposta…"):
+            _projetar(cfg, pp, fp, cand, curva, ctx, sorted(marcados), horizonte, janelas,
+                      hoje, dias_ativo, desde, fim)
         st.session_state["etapa"] = 3
         st.rerun()
 
@@ -401,8 +403,9 @@ def _etapa_projecao() -> None:
 # --------------------------------------------------------------------------- #
 def render() -> None:
     cfg = load_config()
-    pp = produtos_prep()
-    fp = vendas_fp()
+    with st.spinner("Carregando bases de produtos e vendas…"):
+        pp = produtos_prep()
+        fp = vendas_fp()
 
     etapa = int(st.session_state.get("etapa", 1))
     form = st.session_state.get("formulario") or {}
