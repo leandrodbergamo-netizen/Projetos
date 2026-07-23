@@ -3,10 +3,23 @@
 O que é premissa da própria aposta (aproveitamento, reserva CD, teto por
 SKU-tamanho) é editado no fluxo da aposta; aqui ficam as regras estáveis.
 """
+from datetime import date
+
 import streamlit as st
 
 from core.config_utils import load_config, save_config
-from core.dados import espelhos_loja_nova
+from core.dados import espelhos_loja_nova, rank_colecao
+
+_MARCA_CARD = '<span class="cfg-card"></span>'   # ativa o fundo cinza (estilo.py)
+
+
+def _opcoes_colecao() -> list[str]:
+    """Nomes de coleção de Inverno 2022 até hoje (para o corte de escopo)."""
+    ops = []
+    for ano in range(2022, date.today().year + 1):
+        ops.append(f"INVERNO {ano}")
+        ops.append(f"VERÃO {ano}-{ano + 1}")
+    return ops
 
 
 def render() -> None:
@@ -17,12 +30,14 @@ def render() -> None:
 
     c1, c2 = st.columns(2)
     with c1, st.container(border=True):
+        st.markdown(_MARCA_CARD, unsafe_allow_html=True)
         st.subheader("Fim de período saudável")
         st.caption("Até quando a coleção deve estar vendida — define o horizonte da projeção.")
         a, b = st.columns(2)
         fim_verao = a.text_input("VERÃO (dd/mm)", str(cfg.get("fim_periodo_verao", "02/01")))
         fim_inverno = b.text_input("INVERNO (dd/mm)", str(cfg.get("fim_periodo_inverno", "14/06")))
     with c2, st.container(border=True):
+        st.markdown(_MARCA_CARD, unsafe_allow_html=True)
         st.subheader("Distribuição")
         st.caption("A reserva CD sugerida ao abrir uma aposta — é ela que garante a "
                    "reposição (não há teto de cobertura por loja).")
@@ -32,15 +47,21 @@ def render() -> None:
 
     c3, c4 = st.columns(2)
     with c3, st.container(border=True):
+        st.markdown(_MARCA_CARD, unsafe_allow_html=True)
         st.subheader("Escopo e sazonalidade")
         st.caption("Qual histórico entra na conta e quando a curva recua de nível.")
         a, b = st.columns(2)
         min_amostra = a.number_input("Amostra mín. da curva (un)", 100, 5000,
                                      int(cfg.get("min_amostra_curva", 800)), 100)
-        desde_colecao = b.number_input("Coleções desde (rank)", 2018.0, 2030.0,
-                                       float(cfg.get("desde_colecao", 2022.0)), 0.5,
-                                       help="Inverno 2022 = 2022.0; Verão 2022-2023 = 2022.5")
+        ops_col = _opcoes_colecao()
+        atual = float(cfg.get("desde_colecao", 2022.0))
+        idx = next((i for i, c in enumerate(ops_col) if rank_colecao(c) == atual), 0)
+        desde_nome = b.selectbox("Considerar coleções desde", ops_col, index=idx,
+                                 key="cfg_desde_colecao",
+                                 help="Só coleções a partir desta entram como espelho.")
+        desde_colecao = float(rank_colecao(desde_nome))
     with c4, st.container(border=True):
+        st.markdown(_MARCA_CARD, unsafe_allow_html=True)
         st.subheader("Lojas espelho (novas)")
         st.caption("Loja nova sem venda dos espelhos usa a participação da loja espelho.")
         regras = espelhos_loja_nova()

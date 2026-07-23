@@ -175,7 +175,7 @@ def _cartao_espelho(linha, grades, marcados) -> bool:
         nome = str(linha.get("desc_item") or sku)
         if foto:
             c2.markdown(f'<img class="foto-espelho" src="{foto}">', unsafe_allow_html=True)
-            if c2.button("🔍", key=f"zoom_{sku}", help="Ampliar a foto"):
+            if c2.button("🔍", key=f"zoom_{sku}", help="Ampliar a foto", type="tertiary"):
                 _foto_ampliada(foto, nome)
         else:
             c2.markdown(f'<div class="swatch">{nome[:1]}</div>', unsafe_allow_html=True)

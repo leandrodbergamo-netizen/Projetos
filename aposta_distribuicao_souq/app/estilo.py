@@ -64,14 +64,28 @@ h3 {{ font-size: 21px !important; }}
 [data-testid="stMain"] .stButton button[kind^="primary"]:hover {{
   background-color: {TERRACOTA_HOVER}; border-color: {TERRACOTA_HOVER};
 }}
-[data-testid="stMain"] .stButton button[kind^="secondary"],
-[data-testid="stMain"] .stDownloadButton button {{
-  border: 1.5px solid {VERDE}; color: {VERDE}; background: #EFEDE3; font-weight: 600;
+.stButton button[kind^="secondary"], .stDownloadButton button {{
+  border: none; color: {FUNDO} !important; background: {VERDE}; font-weight: 600;
 }}
-[data-testid="stMain"] .stButton button[kind^="secondary"]:hover,
-[data-testid="stMain"] .stDownloadButton button:hover {{
-  background: {VERDE}; color: {FUNDO}; border-color: {VERDE};
+.stButton button[kind^="secondary"]:hover, .stDownloadButton button:hover {{
+  background: #55624A; color: {FUNDO} !important;
 }}
+.stButton button[kind^="secondary"]:disabled, .stButton button[kind^="primary"]:disabled {{
+  background: #DAD7CB; color: #98957F !important; border: none;
+}}
+/* a navegação da sidebar mantém o próprio estilo (pill só quando ativa) */
+[data-testid="stSidebar"] .stButton button[kind^="secondary"] {{
+  background: transparent; color: {TEXTO_2} !important; font-weight: 400;
+}}
+[data-testid="stSidebar"] .stButton button[kind^="secondary"]:hover {{
+  background: #E9E6DA; color: {TINTA} !important;
+}}
+/* botão terciário (ex.: lupa da foto): discreto, acende no hover */
+.stButton button[kind="tertiary"] {{
+  padding: 0 4px; min-height: 0; border: none; background: none;
+  font-size: 13px; opacity: .4; color: {TEXTO_2} !important;
+}}
+.stButton button[kind="tertiary"]:hover {{ opacity: 1; background: none; }}
 
 /* ---------------- inputs ---------------- */
 [data-baseweb="input"], [data-baseweb="select"] > div {{ border-radius: 8px; }}
@@ -101,6 +115,11 @@ h3 {{ font-size: 21px !important; }}
 /* cartões nativos (st.container border=True) */
 [data-testid="stVerticalBlockBorderWrapper"] > div {{
   border-color: {BORDA} !important; border-radius: 12px !important; background: #FFFFFF;
+}}
+/* cartões de premissas (Configurações): fundo cinza, marcados com .cfg-card */
+.cfg-card {{ display: none; }}
+[data-testid="stVerticalBlockBorderWrapper"]:has(.cfg-card) > div {{
+  background: #ECEBE7 !important; border-color: #DCD9D2 !important;
 }}
 
 /* ---------------- componentes próprios ---------------- */
