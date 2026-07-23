@@ -1,0 +1,7 @@
+# Tema Souq — papel-quente, tinta escura e acento vermelho (ver app/estilo.py)
+[theme]
+base = "light"
+primaryColor = "#BE3A34"
+backgroundColor = "#F6F4EF"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#201D1A"

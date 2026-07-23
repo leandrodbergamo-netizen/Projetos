@@ -1,9 +1,11 @@
 import streamlit as st
 from pathlib import Path
 
+from app import estilo
 from app.pages import nova_aposta, historico, configuracoes, auditoria
 
 st.set_page_config(page_title="Aposta & Distribuição — Souq Roupa", page_icon="🧵", layout="wide")
+estilo.aplicar()
 
 # A distribuição vive dentro da própria aba de aposta (operação fluida).
 PAGES = {
@@ -13,8 +15,9 @@ PAGES = {
     "Auditoria": auditoria,
 }
 
-st.sidebar.title("Aposta & Distribuição")
-st.sidebar.caption("Souq Roupa")
+st.sidebar.markdown('<div class="marca-souq">Souq</div>'
+                    '<div class="marca-sub">Aposta &amp; Distribuição</div>',
+                    unsafe_allow_html=True)
 
 # Navegação em blocos (botões de largura cheia); o ativo fica destacado.
 if st.session_state.get("pagina") not in PAGES:

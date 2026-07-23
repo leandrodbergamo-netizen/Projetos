@@ -94,11 +94,12 @@ def render() -> None:
                                         "participacoes_hist", "curva_tamanhos",
                                         "velocidades_loja", "espelhos", "suavizacao",
                                         "lojas_com_espelho_proprio", "inputs",
-                                        "resultado", "avisos_projecao")
+                                        "resultado", "avisos_projecao", "contribuicoes")
                 if k in payload
             }
             st.session_state.pop("distribuicao", None)
             st.session_state["pagina"] = "Nova Aposta"
+            st.session_state["etapa"] = 4      # direto na etapa de distribuição
             st.rerun()
 
     b1, b2 = st.columns(2)

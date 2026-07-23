@@ -9,6 +9,7 @@ destino físico. O resultado fica na tela até a próxima projeção.
 import pandas as pd
 import streamlit as st
 
+from app import estilo
 from core.config_utils import load_config
 from core.dados import (cluster_por_loja, espelhos_loja_nova, lojas_alvo_souq,
                         opcoes_perfil_clima)
@@ -21,12 +22,14 @@ def _mostra_resultado(resultado, lojas_df, aposta_total=None, chave_editor="0"):
     acrescimo = getattr(resultado, "acrescimo_garantia", 0)
     m1, m2, m3, m4 = st.columns(4)
     aposta_final = (aposta_total or 0) + acrescimo
-    m1.metric("Aposta final", f"{aposta_final:.0f}",
-              delta=f"+{acrescimo} un pela grade garantida" if acrescimo else None)
-    pct = f" ({100 * resultado.reserva_cd / aposta_total:.0f}%)" if aposta_total else ""
-    m2.metric("Reserva CD" + pct, f"{resultado.reserva_cd:.0f}")
-    m3.metric("Distribuído", f"{resultado.total_distribuido()}")
-    m4.metric("Sobra p/ CD", f"{resultado.sobra_para_cd}")
+    estilo.kpi(m1, "Aposta final", f"{aposta_final:.0f}",
+               f"+{acrescimo} un pela grade garantida" if acrescimo else "unidades")
+    pct = f"{100 * resultado.reserva_cd / aposta_total:.0f}% da aposta" if aposta_total else ""
+    estilo.kpi(m2, "Reserva CD", f"{resultado.reserva_cd:.0f}", pct)
+    estilo.kpi(m3, "Distribuído", f"{resultado.total_distribuido()}",
+               "unidades nas lojas", escuro=True)
+    estilo.kpi(m4, "Sobra p/ CD", f"{resultado.sobra_para_cd}", "não distribuído")
+    st.markdown("")
     for aviso in resultado.avisos:
         st.info(aviso)
 
@@ -51,7 +54,7 @@ def _mostra_resultado(resultado, lojas_df, aposta_total=None, chave_editor="0"):
     tot_editado = int(editada.to_numpy().sum())
     tot_modelo = int(resultado.total_distribuido())
     delta = tot_editado - tot_modelo
-    c1, c2 = st.columns(2)
+    c1, c2, _ = st.columns([1.4, 1.4, 2])
     c1.metric("Distribuído (após edição)", f"{tot_editado}",
               delta=f"{delta:+d} un vs modelo" if delta else None)
     c2.metric("Aposta final (após edição)", f"{aposta_final + delta:.0f}")
@@ -133,7 +136,8 @@ def secao(proj: dict) -> None:
     st.caption(f"Teto de cobertura (Configurações): máx. **{cobertura:.0f} semanas** "
                "da velocidade da própria loja.")
 
-    if st.button("Distribuir", type="primary"):
+    if st.button(f"Distribuir {aposta_usada:.0f} un em {len(lojas_alvo)} lojas",
+                 type="primary"):
         resultado = distribuir(
             aposta_total=aposta_usada,
             participacoes=part,
