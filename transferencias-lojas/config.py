@@ -13,11 +13,11 @@ RAIZ = Path(__file__).resolve().parent
 
 # Uma loja doadora só pode ceder um item que esteja parado há, no mínimo,
 # este número de semanas contadas a partir da data de recebimento em loja.
-SEMANAS_SEM_VENDA_MIN = 2
+SEMANAS_SEM_VENDA_MIN = 3
 
 # Uma loja doadora não pode atender mais do que este número de lojas distintas
 # em uma mesma rodada de sugestões.
-MAX_LOJAS_POR_DOADORA = 4
+MAX_LOJAS_POR_DOADORA = 5
 
 # Janela (em dias) usada para medir a "probabilidade de venda" pela venda
 # histórica do SKU pai em cada loja.
