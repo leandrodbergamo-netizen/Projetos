@@ -12,7 +12,7 @@ import streamlit as st
 from app import estilo
 from core.config_utils import load_config
 from core.dados import (cluster_por_loja, espelhos_loja_nova, lojas_alvo_souq,
-                        opcoes_perfil_clima)
+                        lojas_souq, opcoes_perfil_clima)
 from core.regra_distribuicao import (arredondar_maior_resto, distribuir,
                                      normalizar_curva, participacao_com_loja_nova)
 
@@ -65,10 +65,12 @@ def _mostra_resultado(resultado, lojas_df, proj, aposta_total=None, chave_editor
         st.dataframe(matriz, width="stretch")
         return
     # todas as lojas-alvo aparecem (a zerada pode ser editada para cima),
-    # ordenadas da maior para a menor; nome no lugar do código
+    # ordenadas da maior para a menor. O mapa de nomes usa o cadastro COMPLETO:
+    # se o filtro Perfil/Clima mudar depois de distribuir, nenhuma loja da
+    # matriz pode virar código (ex.: '111.0' no lugar de Ribeirão Iguatemi).
     matriz = matriz.loc[matriz.sum(axis=1).sort_values(ascending=False).index]
     nomes = {str(float(r["sk_localidade"])): f'{r["desc_nome"]} ({r["Perfil"]}/{r["Temperatura"]})'
-             for _, r in lojas_df.iterrows()}
+             for _, r in lojas_souq().iterrows()}
     matriz.index = [nomes.get(i, i) for i in matriz.index]
 
     # a matriz-base (só lojas) é a última edição aplicada; o CD entra como linha
@@ -147,8 +149,21 @@ def _mostra_resultado(resultado, lojas_df, proj, aposta_total=None, chave_editor
                     "aposta_final": float(aposta_final),
                     "distribuido_editado": tot_lojas,
                 })
-            st.session_state["flash_matriz"] = "Distribuição salva no Histórico ✓"
+            salvou = True
         except Exception:
+            salvou = False
+        if salvou:
+            # ciclo encerrado: zera 100% dos campos para a próxima aposta
+            # (a decisão de limpar só AQUI é do negócio — antes de salvar, tudo
+            # fica editável para ajustes)
+            for k in ("projecao", "distribuicao", "sel_todos_esp"):
+                st.session_state.pop(k, None)
+            st.session_state["formulario"] = {}
+            st.session_state["espelhos_marcados"] = []
+            st.session_state["etapa"] = 1
+            st.session_state["flash_ciclo"] = ("Distribuição salva no Histórico ✓ — "
+                                               "campos limpos para a próxima aposta.")
+        else:
             st.session_state["flash_matriz"] = "Não foi possível salvar no Histórico."
         st.rerun()
 

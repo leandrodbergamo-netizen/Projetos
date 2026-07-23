@@ -75,6 +75,8 @@ def _contexto_form(form: dict) -> str:
 # Etapa 1 — Produto
 # --------------------------------------------------------------------------- #
 def _etapa_produto(cfg, pp) -> None:
+    if st.session_state.get("flash_ciclo"):
+        st.success(st.session_state.pop("flash_ciclo"))
     st.caption("Descreva o produto novo. O sistema busca espelhos comparáveis e "
                "projeta a aposta até o fim do período saudável.")
     form = st.session_state.get("formulario") or {}
@@ -95,8 +97,10 @@ def _etapa_produto(cfg, pp) -> None:
         tecido = st.selectbox("Tecido (matéria-prima)", ops_tec,
                               index=ops_tec.index(form["tecido"]) if form.get("tecido") in ops_tec else None,
                               placeholder="Escolha o tecido…")
-        cores = st.multiselect("Cor", opcoes("cor_grupo"), default=form.get("cores") or [],
-                               help="Vazio = todas as cores. O filtro afrouxa sozinho se faltar espelho.")
+        cores = st.multiselect("Cor", opcoes_por_relevancia("cor_grupo"),
+                               default=form.get("cores") or [],
+                               help="Ordenadas por nº de modelos. Vazio = todas as cores; "
+                                    "o filtro afrouxa sozinho se faltar espelho. Digite para buscar.")
     with c3:
         preco = st.number_input("Preço sugerido (R$)", min_value=0.0,
                                 value=float(form["preco"]) if form.get("preco") else None,
@@ -374,11 +378,8 @@ def _projetar(cfg, pp, fp, cand, curva, ctx, escolhidos, horizonte, janelas,
     except Exception:
         st.session_state["flash_salvo"] = False
 
-    # projeção concluída (e salva): limpa 100% dos campos para a próxima aposta.
-    # A projeção/distribuição atual segue viva nas etapas 3-4 via `projecao`.
-    st.session_state["formulario"] = {}
-    st.session_state["espelhos_marcados"] = []
-    st.session_state.pop("sel_todos_esp", None)
+    # os campos NÃO limpam aqui: o comprador pode voltar e mudar espelhos ou
+    # inputs. A limpeza total acontece no "Salvar distribuição no Histórico".
 
 
 # --------------------------------------------------------------------------- #
@@ -420,9 +421,8 @@ def _etapa_projecao() -> None:
 
     st.markdown("")
     b1, b2, _ = st.columns([1.4, 1.6, 3])
-    if b1.button("← Novo produto", width="stretch",
-                 help="Os campos já estão limpos para a próxima aposta."):
-        st.session_state["etapa"] = 1
+    if b1.button("← Espelhos", width="stretch"):
+        st.session_state["etapa"] = 2
         st.rerun()
     if b2.button("Distribuir →", type="primary", width="stretch"):
         st.session_state["etapa"] = 4
