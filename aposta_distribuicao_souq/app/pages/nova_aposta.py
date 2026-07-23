@@ -31,6 +31,13 @@ def _foto(url):
     return u if u.lower().endswith((".jpg", ".jpeg", ".png", ".webp")) else None
 
 
+@st.dialog("Foto do espelho", width="large")
+def _foto_ampliada(url: str, nome: str) -> None:
+    """Modal com a foto grande; fecha no ✕ (ou clicando fora)."""
+    st.markdown(f"**{nome}**")
+    st.image(url, width="stretch")
+
+
 def _grupo_predominante(pp, subgrupo, tecido, desde=2022.0):
     """Construção (grupo) mais comum do subgrupo+tecido no escopo.
 
@@ -72,23 +79,28 @@ def _etapa_produto(cfg, pp) -> None:
                "projeta a aposta até o fim do período saudável.")
     form = st.session_state.get("formulario") or {}
 
+    # aposta nova começa SEM preenchimento: subgrupo, tecido e preço vazios
+    # (voltando de uma etapa posterior, os valores do formulário são mantidos)
     c1, c2, c3 = st.columns(3)
     with c1:
         ops_sub = opcoes("desc_sub_grupo_wbg")
         subgrupo = st.selectbox("Subgrupo", ops_sub,
-                                index=ops_sub.index(form["subgrupo"]) if form.get("subgrupo") in ops_sub else 0)
+                                index=ops_sub.index(form["subgrupo"]) if form.get("subgrupo") in ops_sub else None,
+                                placeholder="Escolha o subgrupo…")
         sku_ref = st.text_input("SKU pai / estilo (opcional)", value=form.get("sku_ref", ""),
                                 placeholder="04.26.__.___.___",
                                 help="Referência livre do produto novo — identifica o cenário no Histórico.").strip()
     with c2:
         ops_tec = opcoes_por_relevancia("grupo_material")
         tecido = st.selectbox("Tecido (matéria-prima)", ops_tec,
-                              index=ops_tec.index(form["tecido"]) if form.get("tecido") in ops_tec else 0)
+                              index=ops_tec.index(form["tecido"]) if form.get("tecido") in ops_tec else None,
+                              placeholder="Escolha o tecido…")
         cores = st.multiselect("Cor", opcoes("cor_grupo"), default=form.get("cores") or [],
                                help="Vazio = todas as cores. O filtro afrouxa sozinho se faltar espelho.")
     with c3:
         preco = st.number_input("Preço sugerido (R$)", min_value=0.0,
-                                value=float(form.get("preco", 498.0)), step=10.0)
+                                value=float(form["preco"]) if form.get("preco") else None,
+                                step=10.0, placeholder="ex.: 498")
         dt_padrao = pd.Timestamp(form["dt_entrada"]).date() if form.get("dt_entrada") else date.today()
         dt_entrada = st.date_input("Data de entrada em loja", value=dt_padrao, format="DD/MM/YYYY",
                                    help="Premissa dt_envio + 7 dias; posiciona a janela sazonal.")
@@ -124,15 +136,16 @@ def _etapa_produto(cfg, pp) -> None:
              "grade (36≡XPP … 46≡GG). A grade também define as colunas da matriz.")
 
     desde = float(cfg.get("desde_colecao", 2022.0))
-    grupo_faixa = _grupo_predominante(pp, subgrupo, tecido, desde=desde)
-    fx = faixa_preco(grupo_faixa, subgrupo, preco)["faixa"]
+    pronto = subgrupo is not None and tecido is not None and preco is not None and preco > 0
+    grupo_faixa = _grupo_predominante(pp, subgrupo, tecido, desde=desde) if pronto else None
+    fx = faixa_preco(grupo_faixa, subgrupo, preco)["faixa"] if pronto else None
     fim = fim_periodo_saudavel(colecao, cfg.get("fim_periodo_verao", "02/01"),
                                cfg.get("fim_periodo_inverno", "14/06"))
     if pd.Timestamp(dt_entrada) > pd.Timestamp(fim):
         st.warning("A data de entrada é depois do fim do período desta coleção. Confira a coleção.")
 
     b, resto = st.columns([1.6, 4])
-    if b.button("Buscar espelhos →", type="primary", width="stretch"):
+    if b.button("Buscar espelhos →", type="primary", width="stretch", disabled=not pronto):
         st.session_state["formulario"] = {
             "subgrupo": subgrupo, "tecido": tecido, "cores": cores, "preco": float(preco),
             "sku_ref": sku_ref, "colecao": colecao, "dt_entrada": str(dt_entrada),
@@ -141,9 +154,12 @@ def _etapa_produto(cfg, pp) -> None:
         }
         st.session_state["etapa"] = 2
         st.rerun()
-    resto.caption(f"{subgrupo} · {tecido} · faixa {fx or '—'} · "
-                  f"grade {rotulo_grade(set(grade_sel)) if grade_sel else '—'} · "
-                  f"fim saudável {fim:%d/%m/%Y}")
+    if pronto:
+        resto.caption(f"{subgrupo} · {tecido} · faixa {fx or '—'} · "
+                      f"grade {rotulo_grade(set(grade_sel)) if grade_sel else '—'} · "
+                      f"fim saudável {fim:%d/%m/%Y}")
+    else:
+        resto.caption("Preencha **subgrupo, tecido e preço** para buscar os espelhos.")
 
 
 # --------------------------------------------------------------------------- #
@@ -158,8 +174,9 @@ def _cartao_espelho(linha, grades, marcados) -> bool:
         foto = _foto(linha.get("url"))
         nome = str(linha.get("desc_item") or sku)
         if foto:
-            # st.image tem o botão nativo de ampliar (⛶) ao passar o mouse
-            c2.image(foto, width=64)
+            c2.markdown(f'<img class="foto-espelho" src="{foto}">', unsafe_allow_html=True)
+            if c2.button("🔍", key=f"zoom_{sku}", help="Ampliar a foto"):
+                _foto_ampliada(foto, nome)
         else:
             c2.markdown(f'<div class="swatch">{nome[:1]}</div>', unsafe_allow_html=True)
         envio = linha.get("dt_envio")
