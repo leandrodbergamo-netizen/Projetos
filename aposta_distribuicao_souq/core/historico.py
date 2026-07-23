@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -35,7 +35,7 @@ create table if not exists public."{TABELA}" (
 
 
 def _novo_id() -> str:
-    return datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
 
 
 def _json_seguro(payload: dict) -> str:
@@ -139,8 +139,12 @@ def _excluir_arq(id_: str, caminho: Path) -> None:
 # API pública
 # --------------------------------------------------------------------------- #
 def salvar(resumo: str, payload: dict, caminho_local: Optional[Path] = None) -> str:
-    """Grava um cenário e retorna o id."""
-    id_, criado = _novo_id(), datetime.now()
+    """Grava um cenário e retorna o id.
+
+    `criado_em` é gravado em UTC com fuso explícito (a nuvem roda em UTC);
+    a exibição converte para America/Sao_Paulo.
+    """
+    id_, criado = _novo_id(), datetime.now(timezone.utc)
     if fonte.db_url():
         _salvar_db(id_, criado, resumo, payload)
     else:

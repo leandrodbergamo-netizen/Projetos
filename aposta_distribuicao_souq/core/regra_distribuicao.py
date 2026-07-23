@@ -228,11 +228,11 @@ def distribuir(
     - `max_por_tamanho_loja` (4): nenhuma loja recebe mais que 4 peças do mesmo
       SKU-tamanho. O que passa do teto volta ao CD.
     - `garantir_grade_completa`: **todas** as lojas-alvo recebem ao menos 1 peça
-      de cada tamanho da curva. A garantia é ADITIVA: o rateio proporcional roda
-      normalmente e as peças que faltam para completar as grades são SOMADAS à
-      aposta (`acrescimo_garantia` + aviso) — não reduzem o rateio das demais
-      lojas nem consomem a reserva do CD. Desligado, a loja pode ficar com grade
-      incompleta (ex.: só M e G).
+      de cada tamanho da curva. O rateio proporcional roda normalmente; as peças
+      que faltam são financiadas PRIMEIRO pelo que está no CD (sobra não
+      distribuída e depois a reserva) e, só quando o CD zera, o restante é
+      SOMADO à aposta (`acrescimo_garantia` + aviso). Desligado, a loja pode
+      ficar com grade incompleta (ex.: só M e G).
 
     A sobra não distribuível (teto/grade) é reportada como `sobra_para_cd`.
     """
@@ -284,23 +284,39 @@ def distribuir(
             "retornaram ao CD."
         )
 
-    # garantia de grade ADITIVA: completa 1 peça por tamanho em TODAS as lojas,
-    # somando as peças que faltam à aposta (não tira de ninguém, não usa reserva)
+    # garantia de grade: completa 1 peça por tamanho em TODAS as lojas. O que
+    # falta sai PRIMEIRO do que está no CD (sobra não distribuída, depois a
+    # reserva); só quando o CD zera o restante é SOMADO à aposta.
     acrescimo = 0
     tamanhos_ativos = [t for t, p in (curva_tamanhos or {}).items() if p > 0]
     if garantir_grade_completa and tamanhos_ativos and participacoes:
+        faltam = 0
         for loja in participacoes:
             aberto = matriz.setdefault(loja, {t: 0 for t in curva_tamanhos})
             for tam in tamanhos_ativos:
                 if aberto.get(tam, 0) < 1:
-                    acrescimo += 1 - aberto.get(tam, 0)
+                    faltam += 1 - aberto.get(tam, 0)
                     aberto[tam] = 1
-        if acrescimo:
-            avisos.append(
-                f"Garantia de grade SOMOU {acrescimo} un à aposta "
-                f"({aposta_total:.0f} → {aposta_total + acrescimo:.0f}) para dar "
-                f"1 peça de cada um dos {len(tamanhos_ativos)} tamanhos a todas as lojas."
-            )
+        if faltam:
+            da_sobra = min(faltam, max(sobra, 0))
+            sobra -= da_sobra
+            da_reserva = min(faltam - da_sobra, int(reserva))
+            reserva -= da_reserva
+            usado_cd = da_sobra + da_reserva
+            acrescimo = faltam - usado_cd
+            if usado_cd:
+                pct_efetiva = 100 * reserva / aposta_total if aposta_total > 0 else 0
+                avisos.append(
+                    f"Garantia de grade usou {usado_cd} un do CD para completar as "
+                    f"grades ({da_sobra} da sobra e {da_reserva} da reserva; "
+                    f"reserva efetiva {pct_efetiva:.0f}%)."
+                )
+            if acrescimo:
+                avisos.append(
+                    f"CD esgotado: {acrescimo} un SOMADAS à aposta "
+                    f"({aposta_total:.0f} → {aposta_total + acrescimo:.0f}) para "
+                    f"garantir 1 peça de cada tamanho em todas as lojas."
+                )
         distrib_int = {loja: sum(tams.values()) for loja, tams in matriz.items()}
 
     return ResultadoDistribuicao(

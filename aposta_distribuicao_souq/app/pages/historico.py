@@ -10,11 +10,18 @@ import streamlit as st
 from core import historico
 
 
+def _hora_local(valores):
+    """criado_em é gravado em UTC (a nuvem roda em UTC); exibe em Brasília."""
+    dt = pd.to_datetime(valores, utc=True, errors="coerce")
+    return dt.tz_convert("America/Sao_Paulo") if not hasattr(dt, "dt") \
+        else dt.dt.tz_convert("America/Sao_Paulo")
+
+
 def _linha_csv(row) -> dict:
     p = row["payload"]
     ins, res = p.get("inputs", {}), p.get("resultado", {})
     return {
-        "quando": pd.to_datetime(row["criado_em"]).strftime("%d/%m/%Y %H:%M"),
+        "quando": _hora_local(row["criado_em"]).strftime("%d/%m/%Y %H:%M"),
         "cenario": row["resumo"],
         "sku_ref": ins.get("sku_ref", ""),
         "subgrupo": ins.get("subgrupo", ""),
@@ -50,6 +57,10 @@ def _detalhes(payload: dict) -> None:
                  f"**Aproveitamento:** {100 * float(ins.get('aproveitamento', 0)):.0f}% · "
                  f"**Grade:** {', '.join(ins.get('grade') or []) or '—'}")
     st.write("**Espelhos:** " + (", ".join(payload.get("espelhos", [])) or "—"))
+    if payload.get("distribuicao_editada"):
+        st.caption(f"Distribuição salva · aposta final **{payload.get('aposta_final', 0):.0f} un** · "
+                   f"distribuído **{payload.get('distribuido_editado', 0)} un**")
+        st.dataframe(pd.DataFrame(payload["distribuicao_editada"]).T, width="stretch")
 
 
 def render() -> None:
@@ -70,7 +81,7 @@ def render() -> None:
 
     tabela = pd.DataFrame({
         "Sel": False,
-        "quando": pd.to_datetime(df["criado_em"]).dt.strftime("%d/%m/%Y %H:%M"),
+        "quando": _hora_local(df["criado_em"]).dt.strftime("%d/%m/%Y %H:%M"),
         "cenário": df["resumo"],
         "aposta": df["payload"].map(lambda p: round(p.get("aposta_total", 0))),
         "espelhos": df["payload"].map(lambda p: len(p.get("espelhos", []))),

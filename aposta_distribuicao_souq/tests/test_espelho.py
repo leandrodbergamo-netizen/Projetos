@@ -371,27 +371,41 @@ class TestGradeCompleta:
                           max_por_tamanho_loja=None, garantir_grade_completa=garantir)
 
     def test_garantida_toda_loja_recebe_1_de_cada_tamanho(self):
-        # a garantia e ADITIVA: nenhuma loja e cortada e o rateio das demais nao
-        # muda — as pecas que faltam para completar as grades SOMAM na aposta.
+        # sem reserva nem sobra, o CD esta zerado: o deficit e SOMADO a aposta e
+        # o rateio das demais lojas nao muda.
         r = self._distribui(True)
         for loja, tams in r.matriz.items():
             assert sum(tams.values()) >= 5, f"{loja} nao recebeu a grade"
             assert all(q >= 1 for q in tams.values()), f"{loja} ficou com tamanho zerado"
         assert r.acrescimo_garantia > 0
         assert r.total_distribuido() == 30 + r.acrescimo_garantia
-        assert any("SOMOU" in a for a in r.avisos)
+        assert any("SOMADAS" in a for a in r.avisos)
 
-    def test_garantia_nao_consome_a_reserva_do_cd(self):
-        # 2 lojas x 5 tamanhos = piso 10 > disponivel 6: o que falta e SOMADO a
-        # aposta; a reserva do CD (40% de 10 = 4) permanece intacta.
+    def test_garantia_usa_o_cd_antes_de_somar(self):
+        # loja pequena (10% de 10 un) fica sem varios tamanhos; a reserva do CD
+        # (4 un) cobre o deficit inteiro -> nada e somado a aposta.
         r = self._distribui(True, aposta=10, reserva=0.40)
-        assert sum(r.matriz["L1"].values()) >= 5 and sum(r.matriz["L2"].values()) >= 5
-        assert r.reserva_cd == pytest.approx(4.0)
-        assert not any("Reserva CD cedeu" in a for a in r.avisos)
+        for loja, tams in r.matriz.items():
+            assert all(q >= 1 for q in tams.values()), f"{loja} com tamanho zerado"
+        assert r.acrescimo_garantia == 0
+        assert r.reserva_cd < 4.0                       # reserva foi consumida
+        assert any("usou" in a and "do CD" in a for a in r.avisos)
+        assert r.total_distribuido() == 10 - int(r.reserva_cd)   # aposta nao cresceu
+
+    def test_soma_apenas_depois_de_esgotar_o_cd(self):
+        # reserva de 1 un nao cobre o deficit: 1 sai do CD (zera) e o resto e
+        # SOMADO a aposta, com os dois avisos.
+        r = self._distribui(True, aposta=10, reserva=0.10)
+        for loja, tams in r.matriz.items():
+            assert all(q >= 1 for q in tams.values()), f"{loja} com tamanho zerado"
+        assert r.reserva_cd == pytest.approx(0.0)       # CD esgotou primeiro
+        assert r.acrescimo_garantia > 0
+        assert any("usou" in a and "do CD" in a for a in r.avisos)
+        assert any("CD esgotado" in a for a in r.avisos)
 
     def test_aposta_pequena_nenhuma_loja_fica_sem_grade(self):
-        # aposta 7 < piso 10: mesmo assim TODAS as lojas levam a grade completa,
-        # com o deficit somado a aposta (nunca "ficaram sem grade").
+        # aposta 7 < piso 10: mesmo assim TODAS as lojas levam a grade completa
+        # (nunca "ficaram sem grade").
         r = self._distribui(True, aposta=7)
         for loja, tams in r.matriz.items():
             assert all(q >= 1 for q in tams.values()), f"{loja} com tamanho zerado"

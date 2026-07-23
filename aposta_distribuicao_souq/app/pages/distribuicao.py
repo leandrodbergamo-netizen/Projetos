@@ -18,7 +18,7 @@ from core.regra_distribuicao import distribuir, participacao_com_loja_nova
 TODOS = "TODOS"
 
 
-def _mostra_resultado(resultado, lojas_df, aposta_total=None, chave_editor="0"):
+def _mostra_resultado(resultado, lojas_df, proj, aposta_total=None, chave_editor="0"):
     acrescimo = getattr(resultado, "acrescimo_garantia", 0)
     m1, m2, m3, m4 = st.columns(4)
     aposta_final = (aposta_total or 0) + acrescimo
@@ -34,8 +34,10 @@ def _mostra_resultado(resultado, lojas_df, aposta_total=None, chave_editor="0"):
         st.info(aviso)
 
     st.subheader("Matriz loja × tamanho")
-    st.caption("As células são **editáveis** — ajuste fino direto na tabela; os totais "
-               "abaixo acompanham. Um novo clique em Distribuir descarta as edições.")
+    st.caption("As células são **editáveis**. Edite quantas quiser e clique em "
+               "**Aplicar edições** — os totais recalculam de uma vez só.")
+    if st.session_state.get("flash_matriz"):
+        st.caption(f":green[{st.session_state.pop('flash_matriz')}]")
     matriz = pd.DataFrame(resultado.matriz).T.fillna(0).astype(int)
     if matriz.empty:
         st.dataframe(matriz, width="stretch")
@@ -46,10 +48,13 @@ def _mostra_resultado(resultado, lojas_df, aposta_total=None, chave_editor="0"):
     nomes = {str(float(r["sk_localidade"])): f'{r["desc_nome"]} ({r["Perfil"]}/{r["Temperatura"]})'
              for _, r in lojas_df.iterrows()}
     matriz.index = [nomes.get(i, i) for i in matriz.index]
-    editada = st.data_editor(
-        matriz, width="stretch", key=f"editor_matriz_{chave_editor}",
-        column_config={c: st.column_config.NumberColumn(c, min_value=0, step=1, format="%d")
-                       for c in matriz.columns})
+    # o form segura os reruns: as edições só são processadas no clique
+    with st.form(f"form_matriz_{chave_editor}"):
+        editada = st.data_editor(
+            matriz, width="stretch", key=f"editor_matriz_{chave_editor}",
+            column_config={c: st.column_config.NumberColumn(c, min_value=0, step=1, format="%d")
+                           for c in matriz.columns})
+        st.form_submit_button("Aplicar edições", type="primary")
 
     tot_editado = int(editada.to_numpy().sum())
     tot_modelo = int(resultado.total_distribuido())
@@ -64,6 +69,29 @@ def _mostra_resultado(resultado, lojas_df, aposta_total=None, chave_editor="0"):
         tt.loc["TOTAL"] = tt.sum(axis=0)
         st.dataframe(tt, width="stretch")
     st.session_state["ultima_distribuicao"] = editada
+
+    b1, b2, _ = st.columns([1.8, 1.8, 2])
+    if b1.button("↺ Recarregar sugestão do modelo"):
+        d = st.session_state.get("distribuicao") or {}
+        d["rodada"] = int(d.get("rodada", 0)) + 1
+        st.session_state["flash_matriz"] = "Sugestão do modelo recarregada ✓"
+        st.rerun()
+    if b2.button("Salvar distribuição no Histórico"):
+        try:
+            from core import historico
+
+            matriz_dict = {str(i): {str(c): int(v) for c, v in linha.items()}
+                           for i, linha in editada.iterrows()}
+            historico.salvar(proj["resumo"] + " · distribuição", {
+                **proj,
+                "distribuicao_editada": matriz_dict,
+                "aposta_final": float(aposta_final + delta),
+                "distribuido_editado": tot_editado,
+            })
+            st.session_state["flash_matriz"] = "Distribuição salva no Histórico ✓"
+        except Exception:
+            st.session_state["flash_matriz"] = "Não foi possível salvar no Histórico."
+        st.rerun()
 
 
 def secao(proj: dict) -> None:
@@ -157,6 +185,6 @@ def secao(proj: dict) -> None:
     # muda a cada Distribuir para as edições de célula não vazarem entre rodadas
     d = st.session_state.get("distribuicao")
     if d and d.get("resumo") == proj["resumo"]:
-        _mostra_resultado(d["resultado"], lojas_df,
+        _mostra_resultado(d["resultado"], lojas_df, proj,
                           aposta_total=d.get("aposta_usada", proj["aposta_total"]),
                           chave_editor=str(d.get("rodada", 0)))
