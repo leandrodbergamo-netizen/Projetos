@@ -17,7 +17,7 @@ from core.regra_distribuicao import distribuir, participacao_com_loja_nova
 TODOS = "TODOS"
 
 
-def _mostra_resultado(resultado, lojas_df, reserva_planejada=None, aposta_total=None):
+def _mostra_resultado(resultado, lojas_df, aposta_total=None, chave_editor="0"):
     acrescimo = getattr(resultado, "acrescimo_garantia", 0)
     m1, m2, m3, m4 = st.columns(4)
     aposta_final = (aposta_total or 0) + acrescimo
@@ -31,18 +31,36 @@ def _mostra_resultado(resultado, lojas_df, reserva_planejada=None, aposta_total=
         st.info(aviso)
 
     st.subheader("Matriz loja × tamanho")
+    st.caption("As células são **editáveis** — ajuste fino direto na tabela; os totais "
+               "abaixo acompanham. Um novo clique em Distribuir descarta as edições.")
     matriz = pd.DataFrame(resultado.matriz).T.fillna(0).astype(int)
     if matriz.empty:
         st.dataframe(matriz, width="stretch")
         return
-    matriz["TOTAL"] = matriz.sum(axis=1)
-    matriz = matriz[matriz["TOTAL"] > 0].sort_values("TOTAL", ascending=False)
-    # troca o código da loja pelo nome, com Perfil/Clima ao lado
+    # todas as lojas-alvo aparecem (a zerada pode ser editada para cima),
+    # ordenadas da maior para a menor; nome no lugar do código
+    matriz = matriz.loc[matriz.sum(axis=1).sort_values(ascending=False).index]
     nomes = {str(float(r["sk_localidade"])): f'{r["desc_nome"]} ({r["Perfil"]}/{r["Temperatura"]})'
              for _, r in lojas_df.iterrows()}
     matriz.index = [nomes.get(i, i) for i in matriz.index]
-    st.dataframe(matriz, width="stretch")
-    st.session_state["ultima_distribuicao"] = matriz
+    editada = st.data_editor(
+        matriz, width="stretch", key=f"editor_matriz_{chave_editor}",
+        column_config={c: st.column_config.NumberColumn(c, min_value=0, step=1, format="%d")
+                       for c in matriz.columns})
+
+    tot_editado = int(editada.to_numpy().sum())
+    tot_modelo = int(resultado.total_distribuido())
+    delta = tot_editado - tot_modelo
+    c1, c2 = st.columns(2)
+    c1.metric("Distribuído (após edição)", f"{tot_editado}",
+              delta=f"{delta:+d} un vs modelo" if delta else None)
+    c2.metric("Aposta final (após edição)", f"{aposta_final + delta:.0f}")
+    with st.expander("Totais da matriz editada"):
+        tt = editada.copy()
+        tt["TOTAL"] = tt.sum(axis=1)
+        tt.loc["TOTAL"] = tt.sum(axis=0)
+        st.dataframe(tt, width="stretch")
+    st.session_state["ultima_distribuicao"] = editada
 
 
 def secao(proj: dict) -> None:
@@ -93,7 +111,15 @@ def secao(proj: dict) -> None:
         st.caption("Lojas novas por loja espelho: " + " · ".join(usando_espelho) + ".")
 
     m1, m2, m3 = st.columns(3)
-    m1.metric("Aposta total", f"{proj['aposta_total']:.0f}")
+    sugerida = float(proj["aposta_total"])
+    # o modelo sugere, o comercial decide: a aposta é editável e a distribuição
+    # usa o valor editado (ex.: modelo 90, comercial aposta 120)
+    aposta_usada = float(m1.number_input(
+        "Aposta a distribuir (un)", 0, None, int(round(sugerida)), 5,
+        key=f"aposta_edit_{proj['resumo']}",
+        help="Editável — o modelo sugere, o comercial decide. A distribuição usa este valor."))
+    if round(aposta_usada) != round(sugerida):
+        m1.caption(f"Modelo sugeriu **{sugerida:.0f} un**.")
     m2.metric("Lojas-alvo", f"{len(lojas_alvo)}")
     m3.metric("Novas (extrapoladas)", f"{len(novas)}")
 
@@ -109,7 +135,7 @@ def secao(proj: dict) -> None:
 
     if st.button("Distribuir", type="primary"):
         resultado = distribuir(
-            aposta_total=proj["aposta_total"],
+            aposta_total=aposta_usada,
             participacoes=part,
             curva_tamanhos=proj["curva_tamanhos"],
             reserva_cd_pct=proj.get("reserva_cd_pct", 0.20),
@@ -118,11 +144,15 @@ def secao(proj: dict) -> None:
             max_por_tamanho_loja=max_tam,
             garantir_grade_completa=garantir,
         )
-        st.session_state["distribuicao"] = {"resumo": proj["resumo"], "resultado": resultado}
+        rodada = int(st.session_state.get("_dist_rodada", 0)) + 1
+        st.session_state["_dist_rodada"] = rodada
+        st.session_state["distribuicao"] = {"resumo": proj["resumo"], "resultado": resultado,
+                                            "aposta_usada": aposta_usada, "rodada": rodada}
 
-    # resultado persiste na tela (some se a projeção mudar)
+    # resultado persiste na tela (some se a projeção mudar); a chave do editor
+    # muda a cada Distribuir para as edições de célula não vazarem entre rodadas
     d = st.session_state.get("distribuicao")
     if d and d.get("resumo") == proj["resumo"]:
         _mostra_resultado(d["resultado"], lojas_df,
-                          reserva_planejada=proj["aposta_total"] * proj.get("reserva_cd_pct", 0.20),
-                          aposta_total=proj["aposta_total"])
+                          aposta_total=d.get("aposta_usada", proj["aposta_total"]),
+                          chave_editor=str(d.get("rodada", 0)))

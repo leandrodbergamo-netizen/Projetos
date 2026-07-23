@@ -5,8 +5,7 @@ from core.config_utils import load_config, save_config
 
 def render() -> None:
     st.title("Configurações")
-    st.write("Premissas gerais do app. Na aba **Nova Aposta** só fica a reserva CD, "
-             "que é premissa da própria aposta.")
+    st.write("Premissas gerais do app. **As alterações são salvas automaticamente.**")
     cfg = load_config()
 
     st.subheader("Aposta")
@@ -39,14 +38,16 @@ def render() -> None:
                                     float(cfg.get("desde_colecao", 2022.0)), 0.5,
                                     help="Inverno 2022 = 2022.0; Verão 2022-2023 = 2022.5")
 
-    if st.button("Salvar parâmetros", type="primary"):
-        cfg.update({
-            "reserva_cd_pct": reserva_cd_pct,
-            "fim_periodo_verao": fim_verao.strip(),
-            "fim_periodo_inverno": fim_inverno.strip(),
-            "cobertura_maxima_semanas": cobertura,
-            "min_amostra_curva": int(min_amostra),
-            "desde_colecao": desde_colecao,
-        })
+    # salvamento automático: qualquer mudança vai direto para o config
+    novo = {
+        "reserva_cd_pct": reserva_cd_pct,
+        "fim_periodo_verao": fim_verao.strip(),
+        "fim_periodo_inverno": fim_inverno.strip(),
+        "cobertura_maxima_semanas": cobertura,
+        "min_amostra_curva": int(min_amostra),
+        "desde_colecao": desde_colecao,
+    }
+    if any(cfg.get(k) != v for k, v in novo.items()):
+        cfg.update(novo)
         save_config(cfg)
-        st.success("Parâmetros salvos.")
+        st.toast("Parâmetros salvos.", icon="✅")
