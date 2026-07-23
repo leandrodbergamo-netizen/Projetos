@@ -158,7 +158,8 @@ def _cartao_espelho(linha, grades, marcados) -> bool:
         foto = _foto(linha.get("url"))
         nome = str(linha.get("desc_item") or sku)
         if foto:
-            c2.markdown(f'<img class="foto-espelho" src="{foto}">', unsafe_allow_html=True)
+            # st.image tem o botão nativo de ampliar (⛶) ao passar o mouse
+            c2.image(foto, width=64)
         else:
             c2.markdown(f'<div class="swatch">{nome[:1]}</div>', unsafe_allow_html=True)
         envio = linha.get("dt_envio")

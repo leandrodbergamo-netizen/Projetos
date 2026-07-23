@@ -16,7 +16,7 @@ mapa:
   PRETO: Preto
   PT: Preto
   BRANCO: Branco
-  OFF WHITE: Branco
+  OFF WHITE: Off White      # decisão do negócio: separado de Branco
   CRU: Branco
   CINZA: Cinza
   PRATA: Cinza

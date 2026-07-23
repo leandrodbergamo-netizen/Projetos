@@ -118,7 +118,12 @@ class TestAgruparCor:
     def test_qualificador_claro_escuro_cai_na_cor_base(self):
         assert agrupar_cor("MARROM ESCURO") == "Marrom"
         assert agrupar_cor("AZUL MÉDIO") == "Azul"
-        assert agrupar_cor("OFF WHITE ESCURO") == "Branco"
+        assert agrupar_cor("OFF WHITE ESCURO") == "Off White"
+
+    def test_off_white_separado_de_branco(self):
+        # decisão do negócio: off white tem venda própria, não funde com Branco
+        assert agrupar_cor("OFF WHITE") == "Off White"
+        assert agrupar_cor("BRANCO") == "Branco"
 
     def test_padronagem_vai_para_estampado(self):
         assert agrupar_cor("LISTRADO") == "Estampado"
