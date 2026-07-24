@@ -5,10 +5,15 @@ Fluxo:
      SKU pai, e onde o CD não tem o filho e não há trânsito para a loja.
      A prioridade ("probabilidade de venda") é a venda histórica do SKU pai
      naquela loja na janela configurada.
-  2. doadoras()      -> lojas com estoque do SKU filho parado há >= N semanas
-     desde o recebimento (sem venda no período).
+  2. doadoras()      -> pares (loja, SKU filho) em que o SKU PAI está sem venda
+     na loja há >= N semanas (doa-se o filho, mas o gatilho é o pai) e, quando a
+     data é conhecida, o filho está em loja há >= N semanas.
   3. gerar_sugestoes() -> casa necessidades x doadoras respeitando o limite de
      no máximo MAX_LOJAS_POR_DOADORA lojas atendidas por doadora.
+
+Exceções por loja (config.LOJAS_NAO_DOAM / LOJAS_NAO_RECEBEM, sobreponíveis
+pelos parâmetros nao_doam/nao_recebem de calcular()): lojas fora do jogo como
+doadoras e/ou receptoras.
 """
 from __future__ import annotations
 
@@ -21,14 +26,22 @@ import cobertura
 import sazonalidade
 
 
-def _ultima_venda(vendas: pd.DataFrame) -> pd.DataFrame:
-    """Data da última venda por (loja, sku_filho)."""
+def _ultima_venda_pai(vendas: pd.DataFrame) -> pd.DataFrame:
+    """Data da última venda do SKU PAI (qualquer filho) por loja."""
     if vendas.empty:
-        return pd.DataFrame(columns=["loja", "sku_filho", "ultima_venda"])
+        return pd.DataFrame(columns=["loja", "sku_pai", "ultima_venda_pai"])
     return (
-        vendas.groupby(["loja", "sku_filho"])["data"].max()
-        .reset_index().rename(columns={"data": "ultima_venda"})
+        vendas.groupby(["loja", "sku_pai"])["data"].max()
+        .reset_index().rename(columns={"data": "ultima_venda_pai"})
     )
+
+
+def _filtra_lojas(df: pd.DataFrame, col: str, excluir) -> pd.DataFrame:
+    """Remove linhas cuja loja está na lista de exceção (sem acento/caixa)."""
+    if not excluir or df.empty:
+        return df
+    excl = {config.norm_loja(x) for x in excluir}
+    return df[~df[col].map(config.norm_loja).isin(excl)]
 
 
 def _venda_pai_por_loja(vendas: pd.DataFrame, hoje: date, janela_dias: int) -> pd.DataFrame:
@@ -45,14 +58,18 @@ def _venda_pai_por_loja(vendas: pd.DataFrame, hoje: date, janela_dias: int) -> p
 
 def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
                  janela_dias: int = config.JANELA_VENDAS_DIAS,
-                 curva=None) -> pd.DataFrame:
+                 curva=None, excluir=None) -> pd.DataFrame:
+    """`excluir`: lojas que não recebem (default config.LOJAS_NAO_RECEBEM)."""
     produtos = dados["produtos"]
     estoque_loja = dados["estoque_loja"]
     estoque_cd = dados["estoque_cd"]
     transito = dados["transito"]
     vendas = dados["vendas"]
 
+    if excluir is None:
+        excluir = config.LOJAS_NAO_RECEBEM
     venda_pai = _venda_pai_por_loja(vendas, hoje, janela_dias)
+    venda_pai = _filtra_lojas(venda_pai, "loja", excluir)
 
     # Universo candidato: toda (loja, sku_filho) cujo SKU pai a loja vende.
     cand = venda_pai.merge(produtos, on="sku_pai")  # loja, sku_pai, venda_pai, sku_filho, descricao, grupo
@@ -125,14 +142,27 @@ def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
 
 
 def doadoras(dados: dict[str, pd.DataFrame], hoje: date,
-             semanas_min: int = config.SEMANAS_SEM_VENDA_MIN) -> pd.DataFrame:
+             semanas_min: int = config.SEMANAS_SEM_VENDA_MIN,
+             excluir=None) -> pd.DataFrame:
+    """Pares (loja, sku_filho) elegíveis a doar.
+
+    Gatilho: o SKU PAI está sem venda na loja há >= N semanas — vale para
+    qualquer tipo de produto; a doação continua a nível de SKU filho.
+    `excluir`: lojas que não doam (default config.LOJAS_NAO_DOAM).
+    """
+    produtos = dados["produtos"]
     estoque_loja = dados["estoque_loja"]
     recebimento = dados["recebimento"]
     vendas = dados["vendas"]
 
+    if excluir is None:
+        excluir = config.LOJAS_NAO_DOAM
+
     dias_min = semanas_min * 7
     hoje_ts = pd.Timestamp(hoje)
     d = estoque_loja[estoque_loja["qtd"] > 0].copy()
+    d = _filtra_lojas(d, "loja", excluir)
+    d = d.merge(produtos[["sku_filho", "sku_pai"]], on="sku_filho", how="left")
 
     # Data de recebimento estimada (histórico de estoque). Pode não existir
     # ainda — nesse caso a condição "há N semanas em loja" é relaxada e usamos
@@ -144,16 +174,17 @@ def doadoras(dados: dict[str, pd.DataFrame], hoje: date,
         d["data_recebimento"] = pd.NaT
         d["dias_em_loja"] = pd.NA
 
-    d = d.merge(_ultima_venda(vendas), on=["loja", "sku_filho"], how="left")
+    d = d.merge(_ultima_venda_pai(vendas), on=["loja", "sku_pai"], how="left")
 
-    # Dias sem venda: desde a última venda; se nunca vendeu na janela carregada,
-    # usa a data de recebimento; se também não há recebimento, considera o item
-    # totalmente parado (muito tempo sem venda).
-    ref = d["ultima_venda"].fillna(d["data_recebimento"])
+    # Dias sem venda do PAI: desde a última venda de qualquer filho na loja;
+    # se o pai nunca vendeu na janela carregada, usa a data de recebimento do
+    # filho; se também não há recebimento, considera totalmente parado.
+    ref = d["ultima_venda_pai"].fillna(d["data_recebimento"])
     d["dias_sem_venda"] = (hoje_ts - ref).dt.days
     d["dias_sem_venda"] = d["dias_sem_venda"].fillna(9999).astype(int)
 
-    # Elegível: não vende há >= N semanas E (se conhecida) está em loja há >= N semanas.
+    # Elegível: pai sem venda há >= N semanas E (se conhecida) o filho está em
+    # loja há >= N semanas.
     sem_venda_ok = d["dias_sem_venda"] >= dias_min
     em_loja_ok = d["dias_em_loja"].isna() | (d["dias_em_loja"] >= dias_min)
     d = d[sem_venda_ok & em_loja_ok].copy()
@@ -280,6 +311,43 @@ def ruptura_skus(dados: dict[str, pd.DataFrame]) -> pd.DataFrame:
     return sort.reset_index(drop=True)
 
 
+def cobertura_sortimento(dados: dict[str, pd.DataFrame], hoje: date,
+                         curva=None) -> pd.DataFrame:
+    """Cobertura por (loja, sku_pai) sobre o sortimento carregado.
+
+    prev_sem = previsão SEMANAL full price (dessazonalizada x índice sazonal);
+    cobertura_sem = estoque do pai na loja ÷ prev_sem, em semanas.
+    Sem previsão (pai sem venda full price recente) -> cobertura indefinida (NaN).
+    """
+    produtos = dados["produtos"]
+    estoque_loja = dados["estoque_loja"]
+    if curva is None:
+        curva = dados.get("curva")
+    pares = (estoque_loja.merge(produtos[["sku_filho", "sku_pai"]], on="sku_filho", how="left")
+             [["loja", "sku_pai"]].dropna().drop_duplicates())
+    cob = cobertura.cobertura_receptoras(pares, produtos, estoque_loja,
+                                         dados["vendas"], hoje, curva=curva)
+    cob["prev_sem"] = cob["prev_horizonte"] / config.COBERTURA_HORIZONTE_SEMANAS
+    cob["cobertura_sem"] = cob["estoque_pai"] / cob["prev_sem"].where(cob["prev_sem"] > 0)
+    return cob[["loja", "sku_pai", "estoque_pai", "prev_sem", "cobertura_sem"]]
+
+
+def cobertura_agregada(df: pd.DataFrame, cob: pd.DataFrame, por: str) -> pd.DataFrame:
+    """Cobertura agregada por dimensão: soma de estoque ÷ soma de previsão semanal.
+
+    df vem de ruptura_skus (já filtrado); dedup em (loja, sku_pai) para não
+    contar o mesmo pai uma vez por filho."""
+    if df.empty or cob.empty:
+        return pd.DataFrame(columns=[por, "estoque", "prev_sem", "cobertura_sem"])
+    cols = ["loja", "sku_pai"] + ([] if por == "loja" else [por])
+    pares = df[cols].drop_duplicates(subset=["loja", "sku_pai"])
+    m = pares.merge(cob, on=["loja", "sku_pai"], how="left")
+    g = m.groupby(por).agg(estoque=("estoque_pai", "sum"),
+                           prev_sem=("prev_sem", "sum")).reset_index()
+    g["cobertura_sem"] = (g["estoque"] / g["prev_sem"].where(g["prev_sem"] > 0)).round(1)
+    return g[[por, "estoque", "prev_sem", "cobertura_sem"]]
+
+
 def _agrega_ruptura(df: pd.DataFrame, por: str) -> pd.DataFrame:
     """Agrega flags de ruptura por uma dimensão (ex.: 'loja' ou 'subgrupo')."""
     if df.empty:
@@ -308,13 +376,17 @@ def ruptura_por_subgrupo(df: pd.DataFrame) -> pd.DataFrame:
 def calcular(dados: dict[str, pd.DataFrame], hoje: date,
              semanas_min: int = config.SEMANAS_SEM_VENDA_MIN,
              max_lojas: int = config.MAX_LOJAS_POR_DOADORA,
-             janela_dias: int = config.JANELA_VENDAS_DIAS) -> dict[str, pd.DataFrame]:
-    """Roda o fluxo completo e devolve necessidades, doadoras e sugestões."""
+             janela_dias: int = config.JANELA_VENDAS_DIAS,
+             nao_doam=None, nao_recebem=None) -> dict[str, pd.DataFrame]:
+    """Roda o fluxo completo e devolve necessidades, doadoras e sugestões.
+
+    nao_doam / nao_recebem: exceções por loja (None -> listas do config)."""
     # Curva: vinda do banco (nuvem) se presente; senão, do parquet local.
     curva = dados.get("curva")
     if curva is None:
         curva = sazonalidade.carregar_curva()
-    nec = necessidades(dados, hoje, janela_dias=janela_dias, curva=curva)
-    doa = doadoras(dados, hoje, semanas_min=semanas_min)
+    nec = necessidades(dados, hoje, janela_dias=janela_dias, curva=curva,
+                       excluir=nao_recebem)
+    doa = doadoras(dados, hoje, semanas_min=semanas_min, excluir=nao_doam)
     sug = gerar_sugestoes(nec, doa, dados, max_lojas=max_lojas)
     return {"necessidades": nec, "doadoras": doa, "sugestoes": sug}

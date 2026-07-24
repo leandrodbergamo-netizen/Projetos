@@ -157,10 +157,12 @@ def _carregar(hoje_iso: str):
 
 
 @st.cache_data(show_spinner="Calculando sugestões...")
-def _resultado(hoje_iso: str, semanas_min: int, max_lojas: int, janela: int):
+def _resultado(hoje_iso: str, semanas_min: int, max_lojas: int, janela: int,
+               nao_doam: tuple = (), nao_recebem: tuple = ()):
     dados = _carregar(hoje_iso)
     res = engine.calcular(dados, config.data_referencia(),
-                          semanas_min=semanas_min, max_lojas=max_lojas, janela_dias=janela)
+                          semanas_min=semanas_min, max_lojas=max_lojas, janela_dias=janela,
+                          nao_doam=set(nao_doam), nao_recebem=set(nao_recebem))
     # Potencial SEM o teto de lojas por doadora (indicador % Cobertura).
     res["potencial"] = engine.gerar_sugestoes(
         res["necessidades"], res["doadoras"], dados, max_lojas=10**9)
@@ -170,6 +172,11 @@ def _resultado(hoje_iso: str, semanas_min: int, max_lojas: int, janela: int):
 @st.cache_data(show_spinner="Calculando ruptura...")
 def _rup_skus(hoje_iso: str):
     return engine.ruptura_skus(_carregar(hoje_iso))
+
+
+@st.cache_data(show_spinner="Calculando cobertura...")
+def _cobertura(hoje_iso: str):
+    return engine.cobertura_sortimento(_carregar(hoje_iso), config.data_referencia())
 
 
 dados = _carregar(hoje.isoformat())
@@ -183,6 +190,11 @@ def _fmt(n) -> str:
 
 def _pct(x: float) -> str:
     return f"{x:.1f}%".replace(".", ",")
+
+
+def _sem(x) -> str:
+    """Semanas de cobertura: 12.3 -> '12,3 sem'."""
+    return "—" if pd.isna(x) else f"{float(x):.1f} sem".replace(".", ",")
 
 
 def card(alvo, label: str, valor: str, contexto: str = "", cor: str | None = None) -> None:
@@ -296,13 +308,13 @@ NEC_RENOME = {"loja": "Loja", "linha": "Linha", "grupo": "Grupo", "subgrupo": "S
               "prev_4sem": "Prev. 4 sem (pç)", "cobertura_pai": "Cobertura pai (sem)",
               "score": "Score", "qtd_sugerida": "Qtd sugerida"}
 DOA_RENOME = {"loja": "Loja", "sku_filho": "SKU filho", "qtd_disp": "Qtd disponível",
-              "dias_sem_venda": "Sem venda (dias)", "dias_em_loja": "Em loja (dias)"}
+              "dias_sem_venda": "Pai sem venda (dias)", "dias_em_loja": "Em loja (dias)"}
 SUG_RENOME = {"loja_doadora": "Loja doadora", "loja_receptora": "Loja receptora",
               "linha": "Linha", "grupo": "Grupo", "subgrupo": "Subgrupo",
               "colecao": "Coleção", "status": "Status", "sku_pai": "SKU pai",
               "sku_filho": "SKU filho", "tamanho": "Tamanho", "qtd": "Qtd",
               "grade_quebrada": "Grade quebrada", "score_receptora": "Score",
-              "dias_parado_doadora": "Parado (dias)"}
+              "dias_parado_doadora": "Pai parado (dias)"}
 
 FILTROS_SUG = [("linha", "Linha"), ("grupo", "Grupo"), ("subgrupo", "Subgrupo"),
                ("colecao", "Coleção"), ("status", "Status"),
@@ -312,7 +324,7 @@ FILTROS_DIM = [("linha", "Linha"), ("grupo", "Grupo"), ("subgrupo", "Subgrupo"),
 
 _pop = st.popover if hasattr(st, "popover") else st.expander
 
-tab_sug, tab_rup, tab_ve = st.tabs(["Sugestões", "Ruptura", "Vendas × Estoque"])
+tab_sug, tab_rup, tab_ve = st.tabs(["Sugestões", "Ruptura e Cobertura", "Vendas × Estoque"])
 
 # ---------------------------------------------------------------------------
 with tab_sug:
@@ -325,9 +337,10 @@ with tab_sug:
     with c_edit:
         with _pop("Editar parâmetros"):
             semanas_min = st.number_input(
-                "Semanas mín. sem venda (doadora)", min_value=1, max_value=12,
+                "Semanas mín. sem venda do SKU pai (doadora)", min_value=1, max_value=12,
                 value=config.SEMANAS_SEM_VENDA_MIN,
-                help="Item só pode ser retirado da loja se está parado há pelo menos N semanas.")
+                help="A loja só doa o item se o SKU PAI está sem venda nela há pelo "
+                     "menos N semanas (a doação continua a nível de SKU filho).")
             max_lojas = st.number_input(
                 "Máx. lojas atendidas por doadora", min_value=1, max_value=20,
                 value=config.MAX_LOJAS_POR_DOADORA)
@@ -335,14 +348,26 @@ with tab_sug:
                 "Janela de vendas (dias)", min_value=15, max_value=365,
                 value=config.JANELA_VENDAS_DIAS,
                 help="Janela usada para medir a venda histórica do SKU pai.")
-    c_chips.markdown(
-        f'<div class="chips">'
-        f'<span class="chip">Sem venda ≥<b>{semanas_min} sem</b></span>'
-        f'<span class="chip">Máx. por doadora<b>{max_lojas} lojas</b></span>'
-        f'<span class="chip">Janela<b>{janela} dias</b></span>'
-        f'</div>', unsafe_allow_html=True)
+            lojas_exc = sorted(dados["estoque_loja"]["loja"].dropna().unique())
+            _cfg_nd = {config.norm_loja(x) for x in config.LOJAS_NAO_DOAM}
+            _cfg_nr = {config.norm_loja(x) for x in config.LOJAS_NAO_RECEBEM}
+            nao_doam = st.multiselect(
+                "Exceções: lojas que NÃO doam", lojas_exc,
+                default=[l for l in lojas_exc if config.norm_loja(l) in _cfg_nd])
+            nao_recebem = st.multiselect(
+                "Exceções: lojas que NÃO recebem", lojas_exc,
+                default=[l for l in lojas_exc if config.norm_loja(l) in _cfg_nr])
+    chips = (f'<span class="chip">Pai sem venda ≥<b>{semanas_min} sem</b></span>'
+             f'<span class="chip">Máx. por doadora<b>{max_lojas} lojas</b></span>'
+             f'<span class="chip">Janela<b>{janela} dias</b></span>')
+    if nao_doam:
+        chips += f'<span class="chip">Não doam<b>{len(nao_doam)}</b></span>'
+    if nao_recebem:
+        chips += f'<span class="chip">Não recebem<b>{len(nao_recebem)}</b></span>'
+    c_chips.markdown(f'<div class="chips">{chips}</div>', unsafe_allow_html=True)
 
-    res = _resultado(hoje.isoformat(), semanas_min, max_lojas, janela)
+    res = _resultado(hoje.isoformat(), semanas_min, max_lojas, janela,
+                     tuple(nao_doam), tuple(nao_recebem))
     nec, doa, sug, pot = res["necessidades"], res["doadoras"], res["sugestoes"], res["potencial"]
 
     # Cards (preenchidos após os filtros, para refletirem a seleção).
@@ -388,7 +413,7 @@ with tab_sug:
             "Grade": exib["grade_quebrada"].map(
                 lambda s: "GRADE QUEBRADA" if s == "Sim" else ""),
             "Score": exib["score_receptora"].astype(float),
-            "Parado (dias)": exib["dias_parado_doadora"].astype(int),
+            "Pai parado (dias)": exib["dias_parado_doadora"].astype(int),
         })
         tabela = _tabela_html(
             disp, altura=400,
@@ -396,7 +421,7 @@ with tab_sug:
             css={
                 "Score": lambda _: f"color:{COR['acento']};font-weight:600;{_DIR}",
                 "Qtd": lambda _: _DIR,
-                "Parado (dias)": lambda x: (
+                "Pai parado (dias)": lambda x: (
                     f"color:{COR['alerta']};font-weight:600;{_DIR}" if x >= 60 else _DIR),
                 "Grade": lambda x: (f"color:{COR['alerta']};font-weight:700;"
                                     "font-size:10px;letter-spacing:0.04em") if x else "",
@@ -444,14 +469,16 @@ with tab_sug:
 
 # ---------------------------------------------------------------------------
 with tab_rup:
-    st.markdown('<div class="pg-titulo">Ruptura</div>'
-                '<div class="pg-sub">Grades incompletas por loja e subgrupo.</div>',
+    st.markdown('<div class="pg-titulo">Ruptura e Cobertura</div>'
+                '<div class="pg-sub">Grades incompletas e semanas de estoque '
+                'por loja e subgrupo.</div>',
                 unsafe_allow_html=True)
 
     rs = _rup_skus(hoje.isoformat())
     if rs.empty:
         st.info("Sem dados de ruptura.")
     else:
+        cob = _cobertura(hoje.isoformat())
         filtros_r = _linha_filtros(rs, FILTROS_DIM, "fr")
         rf = _aplica(rs, filtros_r)
 
@@ -459,73 +486,149 @@ with tab_rup:
         p_loja = 100 * rf["ruptura"].sum() / tot
         p_trans = 100 * rf["rup_sem_transito"].sum() / tot
         p_cd = 100 * rf["soldout_cd"].sum() / tot
-        m1, m2, m3 = st.columns(3)
+        cob_loja = engine.cobertura_agregada(rf, cob, "loja")
+        prev_tot = float(cob_loja["prev_sem"].sum()) if not cob_loja.empty else 0.0
+        cob_geral = cob_loja["estoque"].sum() / prev_tot if prev_tot > 0 else float("nan")
+        m1, m2, m3, m4 = st.columns(4)
         card(m1, "% Ruptura loja", _pct(p_loja), "estoque físico da loja")
         card(m2, "% Ruptura loja + trânsito", _pct(p_trans), "considerando peças a caminho")
         card(m3, "% Sold out CD", _pct(p_cd), "sem reposição disponível no CD")
+        card(m4, "Cobertura média", _sem(cob_geral),
+             "estoque ÷ venda semanal prevista (full price)")
         st.write("")
 
         with st.container(border=True):
-            t1, t2 = st.columns([3, 1])
-            t1.markdown('<div class="panel-titulo">Ranking de lojas por % de ruptura</div>',
-                        unsafe_allow_html=True)
-            t2.markdown('<div class="panel-nota">maior → menor</div>', unsafe_allow_html=True)
+            c_rup, c_cob = st.columns(2, gap="large")
 
-            # Pré-ordenado no DataFrame (sort=None preserva a ordem no gráfico).
-            d = (engine.ruptura_por_loja(rf)
-                 .sort_values("%Ruptura Loja", ascending=False).reset_index(drop=True))
-            d["loja_curta"] = d["loja"].astype(str).str.replace(_SEM_SOUQ, "", regex=True)
-            rot_acima = f"Acima da média ({_pct(p_loja)})"
-            d["situacao"] = d["%Ruptura Loja"].gt(p_loja).map(
-                {True: rot_acima, False: "Na média ou abaixo"})
-            d["rotulo"] = d["%Ruptura Loja"].map(_pct)
+            with c_rup:
+                t1, t2 = st.columns([2.6, 1.4])
+                t1.markdown('<div class="panel-titulo">% de ruptura por loja</div>',
+                            unsafe_allow_html=True)
+                t2.markdown('<div class="panel-nota">maior → menor</div>', unsafe_allow_html=True)
 
-            base = alt.Chart(d).encode(
-                y=alt.Y("loja_curta:N", title=None, sort=None,
-                        axis=alt.Axis(labelLimit=220)))
-            barras = base.mark_bar(size=13, cornerRadiusEnd=2).encode(
-                x=alt.X("%Ruptura Loja:Q", axis=None,
-                        scale=alt.Scale(domain=[0, float(d["%Ruptura Loja"].max()) * 1.18])),
-                color=alt.Color("situacao:N",
-                                scale=alt.Scale(domain=[rot_acima, "Na média ou abaixo"],
-                                                range=[COR["alerta"], COR["barra"]]),
-                                legend=alt.Legend(orient="top", title=None,
-                                                  labelColor=COR["texto2"])))
-            rotulos = base.mark_text(align="left", dx=5, fontSize=11,
-                                     color=COR["texto"]).encode(
-                x=alt.X("%Ruptura Loja:Q"), text="rotulo:N")
-            st.altair_chart(_estilo_barras((barras + rotulos).properties(
-                height=26 * max(len(d), 1) + 46)), use_container_width=True)
+                # Pré-ordenado no DataFrame (sort=None preserva a ordem no gráfico).
+                d = (engine.ruptura_por_loja(rf)
+                     .sort_values("%Ruptura Loja", ascending=False).reset_index(drop=True))
+                d["loja_curta"] = d["loja"].astype(str).str.replace(_SEM_SOUQ, "", regex=True)
+                rot_acima = f"Acima da média ({_pct(p_loja)})"
+                d["situacao"] = d["%Ruptura Loja"].gt(p_loja).map(
+                    {True: rot_acima, False: "Na média ou abaixo"})
+                d["rotulo"] = d["%Ruptura Loja"].map(_pct)
+
+                base = alt.Chart(d).encode(
+                    y=alt.Y("loja_curta:N", title=None, sort=None,
+                            axis=alt.Axis(labelLimit=220)))
+                barras = base.mark_bar(size=13, cornerRadiusEnd=2).encode(
+                    x=alt.X("%Ruptura Loja:Q", axis=None,
+                            scale=alt.Scale(domain=[0, float(d["%Ruptura Loja"].max()) * 1.18])),
+                    color=alt.Color("situacao:N",
+                                    scale=alt.Scale(domain=[rot_acima, "Na média ou abaixo"],
+                                                    range=[COR["alerta"], COR["barra"]]),
+                                    legend=alt.Legend(orient="top", title=None,
+                                                      labelColor=COR["texto2"])))
+                rotulos = base.mark_text(align="left", dx=5, fontSize=11,
+                                         color=COR["texto"]).encode(
+                    x=alt.X("%Ruptura Loja:Q"), text="rotulo:N")
+                st.altair_chart(_estilo_barras((barras + rotulos).properties(
+                    height=26 * max(len(d), 1) + 46)), use_container_width=True)
+
+            with c_cob:
+                t3, t4 = st.columns([2.6, 1.4])
+                t3.markdown('<div class="panel-titulo">Cobertura por loja</div>',
+                            unsafe_allow_html=True)
+                t4.markdown('<div class="panel-nota">semanas · menor → maior</div>',
+                            unsafe_allow_html=True)
+
+                dc = (cob_loja.dropna(subset=["cobertura_sem"])
+                      .sort_values("cobertura_sem").reset_index(drop=True))
+                if dc.empty:
+                    st.caption("Sem previsão de venda para calcular cobertura no filtro atual.")
+                else:
+                    dc["loja_curta"] = dc["loja"].astype(str).str.replace(_SEM_SOUQ, "", regex=True)
+                    horiz = config.COBERTURA_HORIZONTE_SEMANAS
+                    rot_baixa = f"Abaixo de {horiz} sem"
+                    rot_ok = f"{horiz} sem ou mais"
+                    dc["situacao"] = dc["cobertura_sem"].lt(horiz).map(
+                        {True: rot_baixa, False: rot_ok})
+                    dc["rotulo"] = dc["cobertura_sem"].map(_sem)
+
+                    base_c = alt.Chart(dc).encode(
+                        y=alt.Y("loja_curta:N", title=None, sort=None,
+                                axis=alt.Axis(labelLimit=220)))
+                    barras_c = base_c.mark_bar(size=13, cornerRadiusEnd=2).encode(
+                        x=alt.X("cobertura_sem:Q", axis=None,
+                                scale=alt.Scale(domain=[0, float(dc["cobertura_sem"].max()) * 1.18])),
+                        color=alt.Color("situacao:N",
+                                        scale=alt.Scale(domain=[rot_baixa, rot_ok],
+                                                        range=[COR["alerta"], COR["acento"]]),
+                                        legend=alt.Legend(orient="top", title=None,
+                                                          labelColor=COR["texto2"])))
+                    rot_c = base_c.mark_text(align="left", dx=5, fontSize=11,
+                                             color=COR["texto"]).encode(
+                        x=alt.X("cobertura_sem:Q"), text="rotulo:N")
+                    st.altair_chart(_estilo_barras((barras_c + rot_c).properties(
+                        height=26 * max(len(dc), 1) + 46)), use_container_width=True)
 
         st.write("")
         with st.container(border=True):
-            st.markdown('<div class="panel-titulo">Ruptura por subgrupo</div>',
+            st.markdown('<div class="panel-titulo">Ruptura e cobertura por subgrupo</div>',
                         unsafe_allow_html=True)
             lojas_op = ["Todas as lojas"] + sorted(rf["loja"].unique())
             loja_sel = st.selectbox("Loja", lojas_op, label_visibility="collapsed")
             rsub = rf if loja_sel == "Todas as lojas" else rf[rf["loja"] == loja_sel]
             # Normaliza espaços (evita subgrupo duplicado, ex.: 'JAQUETA ').
             rsub = rsub.assign(subgrupo=rsub["subgrupo"].astype(str).str.strip())
-            por_sub = engine.ruptura_por_subgrupo(rsub)
-            por_sub = por_sub[por_sub["%Ruptura Loja"] > 0].head(25)
-            if por_sub.empty:
-                st.caption("Sem ruptura nos subgrupos do filtro atual.")
-            else:
-                ds = por_sub.sort_values("%Ruptura Loja", ascending=False).copy()
-                ds["nome"] = ds["subgrupo"].astype(str).str.title()
-                ds["rotulo"] = ds["%Ruptura Loja"].map(_pct)
-                base_s = alt.Chart(ds).encode(
-                    y=alt.Y("nome:N", title=None, sort=None,
-                            axis=alt.Axis(labelLimit=220)))
-                barras_s = base_s.mark_bar(size=12, cornerRadiusEnd=2,
-                                           color=COR["barra"]).encode(
-                    x=alt.X("%Ruptura Loja:Q", axis=None,
-                            scale=alt.Scale(domain=[0, float(ds["%Ruptura Loja"].max()) * 1.18])))
-                rot_s = base_s.mark_text(align="left", dx=5, fontSize=11,
-                                         color=COR["texto"]).encode(
-                    x=alt.X("%Ruptura Loja:Q"), text="rotulo:N")
-                st.altair_chart(_estilo_barras((barras_s + rot_s).properties(
-                    height=24 * max(len(ds), 1) + 20)), use_container_width=True)
+
+            c_rs, c_cs = st.columns(2, gap="large")
+            with c_rs:
+                st.caption("% de ruptura — maiores primeiro")
+                por_sub = engine.ruptura_por_subgrupo(rsub)
+                por_sub = por_sub[por_sub["%Ruptura Loja"] > 0].head(25)
+                if por_sub.empty:
+                    st.caption("Sem ruptura nos subgrupos do filtro atual.")
+                else:
+                    ds = por_sub.sort_values("%Ruptura Loja", ascending=False).copy()
+                    ds["nome"] = ds["subgrupo"].astype(str).str.title()
+                    ds["rotulo"] = ds["%Ruptura Loja"].map(_pct)
+                    base_s = alt.Chart(ds).encode(
+                        y=alt.Y("nome:N", title=None, sort=None,
+                                axis=alt.Axis(labelLimit=220)))
+                    barras_s = base_s.mark_bar(size=12, cornerRadiusEnd=2,
+                                               color=COR["barra"]).encode(
+                        x=alt.X("%Ruptura Loja:Q", axis=None,
+                                scale=alt.Scale(domain=[0, float(ds["%Ruptura Loja"].max()) * 1.18])))
+                    rot_s = base_s.mark_text(align="left", dx=5, fontSize=11,
+                                             color=COR["texto"]).encode(
+                        x=alt.X("%Ruptura Loja:Q"), text="rotulo:N")
+                    st.altair_chart(_estilo_barras((barras_s + rot_s).properties(
+                        height=24 * max(len(ds), 1) + 20)), use_container_width=True)
+
+            with c_cs:
+                st.caption("Cobertura (semanas) — menores primeiro")
+                cob_sub = engine.cobertura_agregada(rsub, cob, "subgrupo")
+                cob_sub = (cob_sub.dropna(subset=["cobertura_sem"])
+                           .sort_values("cobertura_sem").head(25))
+                if cob_sub.empty:
+                    st.caption("Sem previsão de venda para calcular cobertura no filtro atual.")
+                else:
+                    dcs = cob_sub.copy()
+                    dcs["nome"] = dcs["subgrupo"].astype(str).str.title()
+                    dcs["rotulo"] = dcs["cobertura_sem"].map(_sem)
+                    horiz = config.COBERTURA_HORIZONTE_SEMANAS
+                    dcs["cor"] = dcs["cobertura_sem"].lt(horiz).map(
+                        {True: COR["alerta"], False: COR["acento"]})
+                    base_cs = alt.Chart(dcs).encode(
+                        y=alt.Y("nome:N", title=None, sort=None,
+                                axis=alt.Axis(labelLimit=220)))
+                    barras_cs = base_cs.mark_bar(size=12, cornerRadiusEnd=2).encode(
+                        x=alt.X("cobertura_sem:Q", axis=None,
+                                scale=alt.Scale(domain=[0, float(dcs["cobertura_sem"].max()) * 1.18])),
+                        color=alt.Color("cor:N", scale=None))
+                    rot_cs = base_cs.mark_text(align="left", dx=5, fontSize=11,
+                                               color=COR["texto"]).encode(
+                        x=alt.X("cobertura_sem:Q"), text="rotulo:N")
+                    st.altair_chart(_estilo_barras((barras_cs + rot_cs).properties(
+                        height=24 * max(len(dcs), 1) + 20)), use_container_width=True)
 
 # ---------------------------------------------------------------------------
 with tab_ve:

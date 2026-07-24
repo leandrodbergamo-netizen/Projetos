@@ -1,5 +1,6 @@
 """Parâmetros de negócio e configuração do app de remanejamento entre lojas."""
 import os
+import unicodedata
 from datetime import date
 from pathlib import Path
 from dotenv import load_dotenv
@@ -60,6 +61,22 @@ STATUS_ESTOQUE_PERMITIDOS = {"NOVIDADE", "PERENE", "LIQUIDAÇÃO", "MIGRADO"}
 
 # Marcas de loja excluídas como doadora e como receptora (ex.: Outlet Alexânia).
 EXCLUIR_MARCAS_LOJA = {"OUTLET"}
+
+# --- Exceções por loja ------------------------------------------------------
+# Lojas que NÃO cedem peças (fora da lista de doadoras) e lojas que NÃO
+# recebem peças (fora das receptoras). Nomes como em Base_Lojas (desc_nome);
+# a comparação ignora acentos e maiúsculas. Também editável no app (popover
+# de parâmetros da aba Sugestões).
+# Natal: problema de emissão de NF desde ~10/07/2026 — vendas não entram na
+# base e todo o estoque "parece parado". Retirar daqui quando normalizar.
+LOJAS_NAO_DOAM: set[str] = {"Souq Natal Shopping"}
+LOJAS_NAO_RECEBEM: set[str] = set()
+
+
+def norm_loja(nome) -> str:
+    """Nome de loja normalizado para comparação (sem acento, minúsculo)."""
+    s = unicodedata.normalize("NFKD", str(nome)).encode("ascii", "ignore").decode()
+    return " ".join(s.lower().split())
 
 # Lead time (dias) entre dt_envio (Base_Produtos) e a chegada do item na loja.
 # Premissa inicial enquanto não há histórico de estoque salvo.
