@@ -39,6 +39,16 @@ LIMITE_GRUPO_PADRAO = 2
 # envia TODO o estoque daquele filho (ignora o limite de peças do grupo).
 PCT_GRADE_MIN = 0.40
 
+# --- Abastecimento a partir do CD -------------------------------------------
+# Peças mantidas no CD por SKU ao distribuir (o CD também atende e-comm e
+# atacado). 0 = distribuir tudo. Editável no popover da aba Abastecimento CD.
+RESERVA_CD_PADRAO = 0
+
+# Cap de outlier na DEMANDA: a contribuição de um mesmo cupom fica limitada ao
+# limite do grupo por SKU pai (cliente VIP que "leva tudo" não infla previsão).
+# Não afeta o relógio "pai sem venda" da doadora nem o painel Vendas × Estoque.
+CAP_DEMANDA_POR_CUPOM = True
+
 # Template da URL da foto do produto (preencha com o padrão do seu site/CDN).
 # Campos disponíveis: {sku_pai}, {sku_filho}. Vazio -> painel sem imagem.
 URL_FOTO_TEMPLATE = os.getenv("URL_FOTO_TEMPLATE", "")

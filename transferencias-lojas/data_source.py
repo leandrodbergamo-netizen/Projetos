@@ -116,8 +116,8 @@ def _build_excel(hoje: date) -> dict[str, pd.DataFrame]:
                 .reset_index().rename(columns={"qtde": "qtd"}))
 
     # --- Vendas (ano corrente) ------------------------------------------
-    cols_ven = ["dt_transacao", "sk_produto", "cod_sku_pai", "qtd_produto",
-                "flag_liquidacao", "tipo_venda", "desc_nome"]
+    cols_ven = ["cod_transacao", "dt_transacao", "sk_produto", "cod_sku_pai",
+                "qtd_produto", "flag_liquidacao", "tipo_venda", "desc_nome"]
     ven = _ler_excel(config.ARQS_VENDAS[-1], "Base_Vendas", usecols=cols_ven)
     ven = ven[ven["tipo_venda"] == "venda"].copy()
     ven["loja"] = ven["desc_nome"].map(lambda n: norm_para_nome.get(_norm(n)))
@@ -129,6 +129,7 @@ def _build_excel(hoje: date) -> dict[str, pd.DataFrame]:
         "data": pd.to_datetime(ven["dt_transacao"]),
         "qtd": pd.to_numeric(ven["qtd_produto"], errors="coerce").fillna(0),
         "liquidacao": pd.to_numeric(ven["flag_liquidacao"], errors="coerce").fillna(0).astype(int),
+        "cupom": ven["cod_transacao"].astype(str),   # p/ cap de outlier na demanda
     })
     vendas = vendas[vendas["qtd"] > 0]
 
@@ -237,6 +238,7 @@ def carregar_mock(hoje: date | None = None) -> dict[str, pd.DataFrame]:
                     "qtd": int(rng.integers(1, 3)), "liquidacao": 0,
                 })
     vendas = pd.DataFrame(vendas_rows)
+    vendas["cupom"] = [f"M{i:06d}" for i in range(len(vendas))]
 
     receb_rows = [{"loja": r["loja"], "sku_filho": r["sku_filho"],
                    "data_recebimento": pd.Timestamp(hoje - timedelta(days=int(rng.integers(3, 90))))}

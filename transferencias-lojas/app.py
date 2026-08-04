@@ -179,6 +179,13 @@ def _cobertura(hoje_iso: str):
     return engine.cobertura_sortimento(_carregar(hoje_iso), config.data_referencia())
 
 
+@st.cache_data(show_spinner="Calculando abastecimento...")
+def _abastecimento(hoje_iso: str, janela: int, reserva: int, nao_recebem: tuple = ()):
+    return engine.calcular_abastecimento(
+        _carregar(hoje_iso), config.data_referencia(), janela_dias=janela,
+        reserva=reserva, nao_recebem=set(nao_recebem))
+
+
 dados = _carregar(hoje.isoformat())
 
 
@@ -315,6 +322,11 @@ SUG_RENOME = {"loja_doadora": "Loja doadora", "loja_receptora": "Loja receptora"
               "sku_filho": "SKU filho", "tamanho": "Tamanho", "qtd": "Qtd",
               "grade_quebrada": "Grade quebrada", "score_receptora": "Score",
               "dias_parado_doadora": "Pai parado (dias)"}
+ABAST_RENOME = {"loja_receptora": "Loja receptora", "linha": "Linha", "grupo": "Grupo",
+                "subgrupo": "Subgrupo", "colecao": "Coleção", "status": "Status",
+                "sku_pai": "SKU pai", "sku_filho": "SKU filho", "tamanho": "Tamanho",
+                "qtd": "Qtd", "introducao": "Introdução", "parcial": "Parcial",
+                "score_receptora": "Score"}
 
 FILTROS_SUG = [("linha", "Linha"), ("grupo", "Grupo"), ("subgrupo", "Subgrupo"),
                ("colecao", "Coleção"), ("status", "Status"),
@@ -324,7 +336,8 @@ FILTROS_DIM = [("linha", "Linha"), ("grupo", "Grupo"), ("subgrupo", "Subgrupo"),
 
 _pop = st.popover if hasattr(st, "popover") else st.expander
 
-tab_sug, tab_rup, tab_ve = st.tabs(["Sugestões", "Ruptura e Cobertura", "Vendas × Estoque"])
+tab_sug, tab_cd, tab_rup, tab_ve = st.tabs(
+    ["Sugestões", "Abastecimento CD", "Ruptura e Cobertura", "Vendas × Estoque"])
 
 # ---------------------------------------------------------------------------
 with tab_sug:
@@ -465,6 +478,146 @@ with tab_sug:
             fmt={"Em loja (dias)": _f1},
             css={"Qtd disponível": lambda _: _DIR, "Sem venda (dias)": lambda _: _DIR,
                  "Em loja (dias)": lambda _: _DIR, "SKU filho": lambda _: _MONO}),
+            unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+with tab_cd:
+    st.markdown('<div class="pg-titulo">Abastecimento a partir do CD</div>'
+                '<div class="pg-sub">CD → lojas com ruptura que vendem o SKU pai. '
+                'O remanejamento entre lojas cobre apenas o que o CD não tem.</div>',
+                unsafe_allow_html=True)
+
+    ca_chips, ca_edit = st.columns([4.2, 1])
+    with ca_edit:
+        with _pop("Editar parâmetros"):
+            reserva_cd = st.number_input(
+                "Reserva por SKU no CD (peças)", min_value=0, max_value=999,
+                value=config.RESERVA_CD_PADRAO,
+                help="Peças mantidas no CD por SKU (e-commerce/atacado). "
+                     "0 = distribuir tudo.")
+    chips_cd = (f'<span class="chip">Reserva CD<b>{reserva_cd} pç/SKU</b></span>'
+                f'<span class="chip">Janela<b>{janela} dias</b></span>')
+    if nao_recebem:
+        chips_cd += f'<span class="chip">Não recebem<b>{len(nao_recebem)}</b></span>'
+    ca_chips.markdown(f'<div class="chips">{chips_cd}</div>', unsafe_allow_html=True)
+
+    ab = _abastecimento(hoje.isoformat(), janela, int(reserva_cd), tuple(nao_recebem))
+    nec_cd, abast, sobra_cd = ab["necessidades_cd"], ab["abastecimento"], ab["sobra_cd"]
+
+    a1, a2, a3, a4 = st.columns(4)
+    skus_eleg = set(nec_cd["sku_filho"]) if not nec_cd.empty else set()
+    card(a1, "SKUs elegíveis no CD", _fmt(len(skus_eleg)),
+         "com estoque no CD e ruptura em loja")
+    pecas_eleg = int(sobra_cd.loc[sobra_cd["sku_filho"].isin(skus_eleg), "qtd"].sum()) \
+        if skus_eleg else 0
+    card(a2, "Peças no CD (elegíveis)", _fmt(pecas_eleg), "estoque dos SKUs com demanda")
+    ph_ab, ph_at = a3.empty(), a4.empty()
+
+    st.write("")
+    if abast.empty:
+        card(ph_ab, "Peças a distribuir", "0", "sem cruzamento demanda × estoque",
+             COR["acento"])
+        card(ph_at, "% da demanda atendida", "—", "sem distribuição para comparar")
+        st.info("Nenhuma distribuição sugerida com os parâmetros atuais.")
+    else:
+        filtros_cd = _linha_filtros(abast, FILTROS_SUG, "fa")
+        va = _aplica(abast, filtros_cd)
+        ativo_cd = any(filtros_cd.values())
+
+        # Demanda correspondente (necessidades do CD) sob os mesmos filtros.
+        filtros_nec = {("loja" if c == "loja_receptora" else c): s
+                       for c, s in filtros_cd.items()}
+        na = _aplica(nec_cd, filtros_nec)
+        pecas_ab = int(va["qtd"].sum())
+        demanda = int(na["qtd_sugerida"].sum()) if len(na) else 0
+        card(ph_ab, "Peças a distribuir", _fmt(pecas_ab),
+             f"{_fmt(len(va))} envios" + (" · filtros ativos" if ativo_cd else ""),
+             COR["acento"])
+        card(ph_at, "% da demanda atendida",
+             _pct(100.0 * pecas_ab / demanda) if demanda else "—",
+             f"{_fmt(pecas_ab)} de {_fmt(demanda)} peças pedidas")
+
+        exib_a = va.copy()
+        exib_a["tamanho"] = _tamanho_de(va)
+        obs = [" · ".join(f for f in (("INTRODUÇÃO" if i == "Sim" else ""),
+                                      ("PARCIAL" if p == "Sim" else "")) if f)
+               for i, p in zip(exib_a["introducao"], exib_a["parcial"])]
+        disp_a = pd.DataFrame({
+            "Loja receptora": "→ " + exib_a["loja_receptora"].astype(str),
+            "Produto": exib_a["subgrupo"].astype(str).str.title() + " · "
+                       + exib_a["colecao"].map(_rotulo_colecao),
+            "SKU pai": exib_a["sku_pai"],
+            "Tamanho": exib_a["tamanho"],
+            "Qtd": exib_a["qtd"].astype(int),
+            "Obs": obs,
+            "Score": exib_a["score_receptora"].astype(float),
+        })
+        tabela_a = _tabela_html(
+            disp_a, altura=400,
+            fmt={"Score": lambda x: f"{x:.1f}", "Qtd": lambda x: str(int(x))},
+            css={
+                "Score": lambda _: f"color:{COR['acento']};font-weight:600;{_DIR}",
+                "Qtd": lambda _: _DIR,
+                "Obs": lambda x: (
+                    (f"color:{COR['alerta']};" if "PARCIAL" in str(x)
+                     else f"color:{COR['acento']};")
+                    + "font-weight:700;font-size:10px;letter-spacing:0.04em") if x else "",
+                "SKU pai": lambda _: _MONO,
+                "Tamanho": lambda _: "text-align:center",
+            })
+
+        ca_conta, ca_limpa, ca_csv = st.columns([4.6, 1.1, 1.3])
+        ca_conta.markdown(f'<div class="conta">{_fmt(len(va))} de {_fmt(len(abast))} '
+                          'envios</div>', unsafe_allow_html=True)
+        if ativo_cd:
+            ca_limpa.button("Limpar filtros", on_click=_limpar_filtros,
+                            args=("fa", FILTROS_SUG), use_container_width=True,
+                            key="limpa_fa")
+        csv_a = (exib_a.rename(columns=ABAST_RENOME)
+                 .to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"))
+        ca_csv.download_button("Exportar CSV", data=csv_a, file_name="abastecimento.csv",
+                               mime="text/csv", use_container_width=True,
+                               type="primary", key="csv_fa")
+
+        st.markdown(tabela_a, unsafe_allow_html=True)
+        st.caption("Prioridade por score (demanda prevista ÷ cobertura). "
+                   "INTRODUÇÃO = loja sem nenhum filho do pai (re-clusterização via CD); "
+                   "PARCIAL = estoque do CD não cobre o pedido. "
+                   "Limites por SKU filho: Home 10 · Acessórios 4 · Roupa 2.")
+
+        with st.expander("Carga por loja receptora"):
+            resumo_cd = (va.groupby("loja_receptora")
+                         .agg(skus=("sku_filho", "nunique"), pecas=("qtd", "sum"))
+                         .reset_index().sort_values("pecas", ascending=False)
+                         .rename(columns={"loja_receptora": "Loja", "skus": "SKUs",
+                                          "pecas": "Peças"}))
+            st.markdown(_tabela_html(
+                resumo_cd, altura=300,
+                css={"Peças": lambda _: _DIR, "SKUs": lambda _: _DIR}),
+                unsafe_allow_html=True)
+
+        st.download_button(
+            "Baixar Excel completo (abastecimento + necessidades + sobra CD)",
+            data=_excel_bytes({"abastecimento": abast, "necessidades_cd": nec_cd,
+                               "sobra_cd": sobra_cd}),
+            file_name="abastecimento_cd.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="xlsx_fa")
+
+    with st.expander("Ver sobra no CD (após a distribuição)"):
+        sob = sobra_cd.rename(columns={
+            "linha": "Linha", "subgrupo": "Subgrupo", "colecao": "Coleção",
+            "status": "Status", "sku_pai": "SKU pai", "sku_filho": "SKU filho",
+            "descricao": "Descrição", "qtd": "Estoque CD", "enviado": "Enviado",
+            "sobra": "Sobra"})
+        ordem = [c for c in ("Linha", "Subgrupo", "Coleção", "Status", "SKU pai",
+                             "SKU filho", "Descrição", "Estoque CD", "Enviado",
+                             "Sobra") if c in sob.columns]
+        st.markdown(_tabela_html(
+            sob[ordem], altura=360, max_linhas=500,
+            css={"Estoque CD": lambda _: _DIR, "Enviado": lambda _: _DIR,
+                 "Sobra": lambda _: _DIR, "SKU pai": lambda _: _MONO,
+                 "SKU filho": lambda _: _MONO}),
             unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------

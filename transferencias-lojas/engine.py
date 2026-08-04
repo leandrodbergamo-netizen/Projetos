@@ -44,6 +44,27 @@ def _filtra_lojas(df: pd.DataFrame, col: str, excluir) -> pd.DataFrame:
     return df[~df[col].map(config.norm_loja).isin(excl)]
 
 
+def _vendas_demanda(vendas: pd.DataFrame, produtos: pd.DataFrame) -> pd.DataFrame:
+    """Vendas para o cálculo de DEMANDA, com cap de outlier por cupom.
+
+    A contribuição de um mesmo cupom fica limitada ao limite do grupo por SKU
+    pai (Home 10 / Acessórios 4 / Roupa 2): cliente VIP que "leva tudo" numa
+    compra não infla a previsão. Sem a coluna `cupom` (nuvem antes da
+    republicação) ou com o cap desligado, devolve as vendas como estão.
+    Não usar no relógio "pai sem venda" da doadora (lá a venda real conta).
+    """
+    if (not config.CAP_DEMANDA_POR_CUPOM or vendas.empty
+            or "cupom" not in vendas.columns):
+        return vendas
+    lim_pai = (produtos.groupby("sku_pai")["grupo_limite"].first()
+               .map(config.limite_do_grupo))
+    v = vendas.copy()
+    total = v.groupby(["cupom", "sku_pai"])["qtd"].transform("sum")
+    cap = v["sku_pai"].map(lim_pai).fillna(config.LIMITE_GRUPO_PADRAO)
+    v["qtd"] = v["qtd"] * (cap / total).clip(upper=1.0)
+    return v
+
+
 def _venda_pai_por_loja(vendas: pd.DataFrame, hoje: date, janela_dias: int) -> pd.DataFrame:
     """Quantidade vendida do SKU pai por loja na janela (probabilidade de venda)."""
     if vendas.empty:
@@ -58,13 +79,23 @@ def _venda_pai_por_loja(vendas: pd.DataFrame, hoje: date, janela_dias: int) -> p
 
 def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
                  janela_dias: int = config.JANELA_VENDAS_DIAS,
-                 curva=None, excluir=None) -> pd.DataFrame:
-    """`excluir`: lojas que não recebem (default config.LOJAS_NAO_RECEBEM)."""
+                 curva=None, excluir=None, gate_cd: str = "sem",
+                 exigir_carrega_pai: bool = True) -> pd.DataFrame:
+    """Rupturas candidatas a receber peças.
+
+    `excluir`: lojas que não recebem (default config.LOJAS_NAO_RECEBEM).
+    `gate_cd`: "sem" = só SKUs que o CD NÃO tem (remanejamento entre lojas);
+               "com" = só SKUs que o CD TEM (abastecimento a partir do CD).
+    `exigir_carrega_pai`: False (abastecimento) não filtra por "loja carrega o
+    pai"; a informação vira a coluna `introducao` ("Sim" = loja zerada em
+    todos os filhos do pai — re-clusterização via CD).
+    """
     produtos = dados["produtos"]
     estoque_loja = dados["estoque_loja"]
     estoque_cd = dados["estoque_cd"]
     transito = dados["transito"]
-    vendas = dados["vendas"]
+    # Demanda usa vendas com cap de outlier por cupom (cliente VIP).
+    vendas = _vendas_demanda(dados["vendas"], produtos)
 
     if excluir is None:
         excluir = config.LOJAS_NAO_RECEBEM
@@ -96,16 +127,26 @@ def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
     # Exceção: pai de FILHO ÚNICO (Home/Acessórios, sem grade) não tem "outro
     # filho" possível — a evidência de que a loja trabalha o produto é a venda
     # do pai na janela, já exigida no início do funil (venda_pai > 0).
+    # No abastecimento (exigir_carrega_pai=False) o CD PODE introduzir: a regra
+    # vira apenas a flag `introducao`.
     el_pai = estoque_loja.merge(produtos[["sku_filho", "sku_pai"]], on="sku_filho", how="left")
     carrega_pai = set(zip(el_pai["loja"], el_pai["sku_pai"]))
     n_filhos = produtos.groupby("sku_pai")["sku_filho"].nunique()
     filho_unico = set(n_filhos[n_filhos == 1].index)
-    cand = cand[[p in filho_unico or (l, p) in carrega_pai
-                 for l, p in zip(cand["loja"], cand["sku_pai"])]]
+    if exigir_carrega_pai:
+        cand = cand[[p in filho_unico or (l, p) in carrega_pai
+                     for l, p in zip(cand["loja"], cand["sku_pai"])]]
+    else:
+        cand = cand.copy()
+        cand["introducao"] = ["" if (l, p) in carrega_pai else "Sim"
+                              for l, p in zip(cand["loja"], cand["sku_pai"])]
 
-    # CD não pode ter o filho.
+    # Gate do CD: remanejamento exige CD zerado; abastecimento exige CD com peça.
     cd_com_estoque = set(estoque_cd.loc[estoque_cd["qtd"] > 0, "sku_filho"])
-    cand = cand[~cand["sku_filho"].isin(cd_com_estoque)]
+    if gate_cd == "com":
+        cand = cand[cand["sku_filho"].isin(cd_com_estoque)]
+    else:
+        cand = cand[~cand["sku_filho"].isin(cd_com_estoque)]
 
     # Não pode haver trânsito do filho para aquela loja.
     em_transito = set(zip(transito["sku_filho"], transito["loja_destino"])) if not transito.empty else set()
@@ -116,6 +157,8 @@ def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
     saida_cols = ["loja", "linha", "grupo", "subgrupo", "colecao", "status",
                   "sku_pai", "sku_filho", "descricao", "prev_4sem", "cobertura_pai",
                   "score", "qtd_sugerida"]
+    if not exigir_carrega_pai:
+        saida_cols = saida_cols + ["introducao"]
     if cand.empty:
         return pd.DataFrame(columns=saida_cols)
 
@@ -274,6 +317,76 @@ def gerar_sugestoes(nec: pd.DataFrame, doa: pd.DataFrame, dados: dict[str, pd.Da
             "status", "sku_pai", "sku_filho", "qtd", "grade_quebrada",
             "score_receptora", "dias_parado_doadora"]
     return pd.DataFrame(sugestoes, columns=cols)
+
+
+def gerar_abastecimento(nec_cd: pd.DataFrame, estoque_cd: pd.DataFrame,
+                        reserva: int = config.RESERVA_CD_PADRAO) -> pd.DataFrame:
+    """Distribui o estoque do CD entre as necessidades, priorizando por score.
+
+    O CD não tem gatilho de "parado", teto de lojas atendidas nem grade
+    quebrada: manda até `qtd_sugerida` (já limitada pelo grupo) enquanto houver
+    saldo, guardando `reserva` peças por SKU. Alocação menor que o pedido
+    ganha flag "Parcial"."""
+    disp = {r["sku_filho"]: max(int(r["qtd"]) - int(reserva), 0)
+            for _, r in estoque_cd.iterrows()}
+    linhas = []
+    for _, need in nec_cd.iterrows():   # nec_cd já vem ordenada por score desc
+        sku = need["sku_filho"]
+        saldo = disp.get(sku, 0)
+        if saldo <= 0:
+            continue
+        pedido = int(need["qtd_sugerida"])
+        qtd = min(pedido, saldo)
+        disp[sku] = saldo - qtd
+        linhas.append({
+            "loja_receptora": need["loja"],
+            "linha": need.get("linha", ""),
+            "grupo": need.get("grupo", ""),
+            "subgrupo": need.get("subgrupo", ""),
+            "colecao": need.get("colecao", ""),
+            "status": need.get("status", ""),
+            "sku_pai": need["sku_pai"],
+            "sku_filho": sku,
+            "qtd": qtd,
+            "introducao": need.get("introducao", ""),
+            "parcial": "Sim" if qtd < pedido else "",
+            "score_receptora": round(float(need["score"]), 1),
+        })
+    cols = ["loja_receptora", "linha", "grupo", "subgrupo", "colecao", "status",
+            "sku_pai", "sku_filho", "qtd", "introducao", "parcial",
+            "score_receptora"]
+    return pd.DataFrame(linhas, columns=cols)
+
+
+def calcular_abastecimento(dados: dict[str, pd.DataFrame], hoje: date,
+                           janela_dias: int = config.JANELA_VENDAS_DIAS,
+                           reserva: int = config.RESERVA_CD_PADRAO,
+                           nao_recebem=None) -> dict[str, pd.DataFrame]:
+    """Fluxo do abastecimento CD → lojas.
+
+    Necessidades = mesmo funil do remanejamento com o gate invertido (só SKUs
+    que o CD tem) e sem exigir carrega-o-pai (CD pode introduzir). Devolve
+    também a sobra por SKU no CD após a distribuição."""
+    curva = dados.get("curva")
+    if curva is None:
+        curva = sazonalidade.carregar_curva()
+    nec_cd = necessidades(dados, hoje, janela_dias=janela_dias, curva=curva,
+                          excluir=nao_recebem, gate_cd="com",
+                          exigir_carrega_pai=False)
+    abast = gerar_abastecimento(nec_cd, dados["estoque_cd"], reserva=reserva)
+
+    enviado = (abast.groupby("sku_filho")["qtd"].sum()
+               if not abast.empty else pd.Series(dtype="int64"))
+    sobra = dados["estoque_cd"].loc[dados["estoque_cd"]["qtd"] > 0].copy()
+    sobra["enviado"] = sobra["sku_filho"].map(enviado).fillna(0).astype(int)
+    sobra["sobra"] = sobra["qtd"].astype(int) - sobra["enviado"]
+    produtos = dados["produtos"]
+    attrs = [c for c in ("sku_filho", "sku_pai", "linha", "subgrupo", "colecao",
+                         "status", "descricao") if c in produtos.columns]
+    sobra = sobra.merge(produtos[attrs].drop_duplicates("sku_filho"),
+                        on="sku_filho", how="left")
+    sobra = sobra.sort_values("sobra", ascending=False).reset_index(drop=True)
+    return {"necessidades_cd": nec_cd, "abastecimento": abast, "sobra_cd": sobra}
 
 
 def ruptura_skus(dados: dict[str, pd.DataFrame]) -> pd.DataFrame:
