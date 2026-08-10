@@ -28,7 +28,7 @@ COR = {
     "header": "#1C2B29", "cab_tabela": "#1E3A5F",
 }
 
-st.set_page_config(page_title="Remanejamento de Estoque", layout="wide",
+st.set_page_config(page_title="Reabastecimento", layout="wide",
                    initial_sidebar_state="collapsed")
 
 
@@ -144,7 +144,7 @@ _fonte_rotulo = _FONTES.get(data_source._fonte(), data_source._fonte())
 st.markdown(
     f'<div class="souq-header">'
     f'<div><span class="logo">SOUQ</span>'
-    f'<span class="titulo">Remanejamento de Estoque</span></div>'
+    f'<span class="titulo">Reabastecimento</span></div>'
     f'<div class="meta">Referência <b>{hoje.day:02d} {_MESES[hoje.month - 1]} {hoje.year}</b>'
     f'<span class="dot"></span>{_fonte_rotulo}</div>'
     f'</div>', unsafe_allow_html=True)

@@ -143,7 +143,7 @@ Configuração:
 - No PC: `DATABASE_URL` no `.env` (string do **Pooler** do Supabase). Teste com
   `python publica_supabase.py`.
 - Na nuvem (Streamlit Cloud → Settings → Secrets):
-  `FONTE_DADOS="supabase"` e `DATABASE_URL="..."`. Main file: `transferencias-lojas/app.py`.
+  `FONTE_DADOS="supabase"` e `DATABASE_URL="..."`. Main file: `reabastecimento/app.py`.
 - App **privado**: restrinja os visualizadores aos e-mails do time.
 
 ## Estrutura do código
