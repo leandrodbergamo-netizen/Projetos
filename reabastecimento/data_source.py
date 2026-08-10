@@ -289,15 +289,20 @@ def carregar_supabase(hoje: date | None = None) -> dict[str, pd.DataFrame]:
     url = db_url()
     if not url:
         raise RuntimeError("DATABASE_URL não configurada (env ou st.secrets).")
+    # dispose() no finally devolve a conexão ao pooler do Supabase; sem isso,
+    # cada carga deixa uma sessão ociosa presa até o processo morrer (ECHECKOUTTIMEOUT).
     eng = create_engine(url, pool_pre_ping=True)
     dados: dict[str, pd.DataFrame] = {}
-    with eng.connect() as con:
-        for n in TABELAS:
-            dados[n] = pd.read_sql(text(f"select * from {n}"), con)
-        try:
-            dados["curva"] = pd.read_sql(text("select * from curva_sazonal"), con)
-        except Exception:
-            dados["curva"] = None
+    try:
+        with eng.connect() as con:
+            for n in TABELAS:
+                dados[n] = pd.read_sql(text(f"select * from {n}"), con)
+            try:
+                dados["curva"] = pd.read_sql(text("select * from curva_sazonal"), con)
+            except Exception:
+                dados["curva"] = None
+    finally:
+        eng.dispose()
 
     # Recompõe tipos de data perdidos na ida/volta.
     for col, nome in [("data", "vendas"), ("data_recebimento", "recebimento"), ("dt_envio", "produtos")]:
