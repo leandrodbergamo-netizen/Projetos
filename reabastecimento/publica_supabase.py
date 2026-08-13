@@ -33,7 +33,7 @@ def publicar() -> None:
     dados = data_source._build_excel(config.data_referencia())
 
     eng = create_engine(url, pool_pre_ping=True)
-    tabelas = list(data_source.TABELAS)
+    tabelas = list(data_source.TABELAS) + list(data_source.TABELAS_NOVAS)
 
     # Curva sazonal (opcional, mas recomendada).
     curva = sazonalidade.carregar_curva()

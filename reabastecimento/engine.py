@@ -77,6 +77,27 @@ def _venda_pai_por_loja(vendas: pd.DataFrame, hoje: date, janela_dias: int) -> p
     )
 
 
+def _pais_elegiveis_abastecimento(dados: dict[str, pd.DataFrame]) -> set | None:
+    """Pais elegíveis ao abastecimento CD: têm dt_envio E (estoque em alguma
+    loja OU venda histórica 2022->hoje, via tabela pais_com_venda).
+
+    None = não filtrar (degradação: produtos sem coluna dt_envio ou 100% nula,
+    caso da nuvem antes da republicação). Sem pais_com_venda, o fallback é a
+    base de vendas do ano corrente.
+    """
+    produtos = dados["produtos"]
+    if "dt_envio" not in produtos.columns or produtos["dt_envio"].notna().sum() == 0:
+        return None
+    tem_envio = set(produtos.loc[produtos["dt_envio"].notna(), "sku_pai"])
+    el = dados["estoque_loja"].merge(produtos[["sku_filho", "sku_pai"]],
+                                     on="sku_filho", how="left")
+    com_estoque = set(el["sku_pai"].dropna())
+    pcv = dados.get("pais_com_venda")
+    com_venda = set(pcv["sku_pai"]) if pcv is not None and not pcv.empty else set()
+    com_venda |= set(dados["vendas"]["sku_pai"].unique())
+    return tem_envio & (com_estoque | com_venda)
+
+
 def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
                  janela_dias: int = config.JANELA_VENDAS_DIAS,
                  curva=None, excluir=None, gate_cd: str = "sem",
@@ -86,6 +107,9 @@ def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
     `excluir`: lojas que não recebem (default config.LOJAS_NAO_RECEBEM).
     `gate_cd`: "sem" = só SKUs que o CD NÃO tem (remanejamento entre lojas);
                "com" = só SKUs que o CD TEM (abastecimento a partir do CD).
+               No modo "com" exige ainda pai já lançado: dt_envio preenchido
+               E (estoque em alguma loja OU venda histórica) — ver
+               _pais_elegiveis_abastecimento.
     `exigir_carrega_pai`: False (abastecimento) não filtra por "loja carrega o
     pai"; a informação vira a coluna `introducao` ("Sim" = loja zerada em
     todos os filhos do pai — re-clusterização via CD).
@@ -145,6 +169,11 @@ def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
     cd_com_estoque = set(estoque_cd.loc[estoque_cd["qtd"] > 0, "sku_filho"])
     if gate_cd == "com":
         cand = cand[cand["sku_filho"].isin(cd_com_estoque)]
+        # Abastecimento só para produto já lançado: pai com dt_envio e com
+        # presença em loja (estoque) ou venda histórica.
+        pais_ok = _pais_elegiveis_abastecimento(dados)
+        if pais_ok is not None:
+            cand = cand[cand["sku_pai"].isin(pais_ok)]
     else:
         cand = cand[~cand["sku_filho"].isin(cd_com_estoque)]
 
@@ -422,6 +451,54 @@ def ruptura_skus(dados: dict[str, pd.DataFrame]) -> pd.DataFrame:
     sort["rup_sem_transito"] = sort["ruptura"] & (~sort["em_transito"])
     sort["soldout_cd"] = sort["rup_sem_transito"] & (~sort["sku_filho"].isin(cd_com))
     return sort.reset_index(drop=True)
+
+
+ALERTA_CD_COLS = ["linha", "grupo", "subgrupo", "colecao", "status", "sku_pai",
+                  "sku_filho", "descricao", "tamanho", "qtd_cd", "dt_envio",
+                  "dias_desde_envio"]
+
+
+def alerta_parado_cd(dados: dict[str, pd.DataFrame], hoje: date) -> pd.DataFrame:
+    """SKUs filho parados no CD: qtd_cd>0, ZERO em qualquer loja, pai com
+    dt_envio (já foi lançado) e status em config.STATUS_ALERTA_CD.
+
+    Requer a tabela `estoque_amplo` (foto CD x lojas de TODOS os status);
+    ausente/None (nuvem ainda não republicada) -> DataFrame vazio.
+    """
+    ea = dados.get("estoque_amplo")
+    produtos = dados["produtos"]
+    if ea is None or ea.empty or "dt_envio" not in produtos.columns:
+        return pd.DataFrame(columns=ALERTA_CD_COLS)
+
+    ea = ea.copy()
+    ea[["qtd_cd", "qtd_lojas"]] = ea[["qtd_cd", "qtd_lojas"]].astype(int)
+    ea = ea[(ea["qtd_cd"] > 0) & (ea["qtd_lojas"] == 0)
+            & (ea["status"].isin(config.STATUS_ALERTA_CD))]
+    if ea.empty:
+        return pd.DataFrame(columns=ALERTA_CD_COLS)
+
+    # Atributos do produto; o status autoritativo é o do estoque_amplo.
+    attrs = ["sku_filho", "sku_pai", "descricao", "tamanho", "linha", "grupo",
+             "subgrupo", "colecao"]
+    attrs = [c for c in attrs if c in produtos.columns]
+    al = ea[["sku_filho", "status", "qtd_cd"]].merge(produtos[attrs],
+                                                     on="sku_filho", how="left")
+
+    # dt_envio do PAI (máximo entre os filhos) — exige pai já lançado.
+    dt_pai = (produtos.dropna(subset=["dt_envio"])
+              .groupby("sku_pai")["dt_envio"].max().rename("dt_envio"))
+    al = al.merge(dt_pai, on="sku_pai", how="left")
+    al = al[al["dt_envio"].notna()].copy()
+    if al.empty:
+        return pd.DataFrame(columns=ALERTA_CD_COLS)
+
+    al["dias_desde_envio"] = (pd.Timestamp(hoje) - al["dt_envio"]).dt.days
+    for c in ALERTA_CD_COLS:
+        if c not in al.columns:
+            al[c] = "—"
+    return (al[ALERTA_CD_COLS]
+            .sort_values(["dias_desde_envio", "qtd_cd"], ascending=False)
+            .reset_index(drop=True))
 
 
 def cobertura_sortimento(dados: dict[str, pd.DataFrame], hoje: date,

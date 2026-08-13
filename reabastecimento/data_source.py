@@ -43,6 +43,35 @@ def _norm(texto) -> str:
     return " ".join(s.lower().split())
 
 
+def _norm_sku_pai(s: pd.Series) -> pd.Series:
+    """cod_sku_pai como string estável ('1234.0' -> '1234')."""
+    return s.dropna().astype(str).str.replace(r"\.0$", "", regex=True)
+
+
+def _pais_venda_hist() -> pd.DataFrame:
+    """SKUs pai com venda nos anos FECHADOS (2022-2025), cacheados em parquet.
+
+    Anos fechados não mudam: lê os Excel uma única vez (minutos) e grava
+    data/cache/pais_venda_hist.parquet, permanente. Se uma base fechada for
+    reprocessada, apagar o parquet para reconstruir. Sem as bases locais
+    (nuvem), devolve DataFrame vazio.
+    """
+    cache = config.PASTA_CACHE / "pais_venda_hist.parquet"
+    if cache.exists():
+        return pd.read_parquet(cache)
+    pais: set[str] = set()
+    for arq in config.ARQS_VENDAS_FECHADOS:
+        if not arq.exists():
+            continue
+        v = _ler_excel(arq, "Base_Vendas", usecols=["cod_sku_pai", "tipo_venda"])
+        v = v[v["tipo_venda"] == "venda"]
+        pais |= set(_norm_sku_pai(v["cod_sku_pai"]))
+    df = pd.DataFrame({"sku_pai": sorted(pais)})
+    config.PASTA_CACHE.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(cache, index=False)
+    return df
+
+
 # ---------------------------------------------------------------------------
 # Fonte EXCEL (bases reais)
 # ---------------------------------------------------------------------------
@@ -90,6 +119,22 @@ def _build_excel(hoje: date) -> dict[str, pd.DataFrame]:
     produtos = produtos.merge(sku_status, on="sku_filho", how="left")
     produtos["status"] = produtos["status"].fillna("—")
 
+    # --- Estoque amplo (TODOS os status, para a aba Alertas) -------------
+    # Foto por sku_filho ANTES do corte de status: RECOMPRA/ETIQUETA CINZA
+    # não aparecem em estoque_cd/estoque_loja, mas aparecem aqui.
+    ea_cd = (est[(est["status_estoque"] == "Estoque")
+                 & (est["localidade"].isin(config.CD_LOCALIDADES_DISPONIVEIS))]
+             .groupby("sku_filho")["qtde"].sum().rename("qtd_cd"))
+    ea_lj = (est[(est["status_estoque"] == "Estoque")
+                 & (est["sk_localidade"].isin(lojas_validas))]
+             .groupby("sku_filho")["qtde"].sum().rename("qtd_lojas"))
+    estoque_amplo = (pd.concat([ea_cd, ea_lj], axis=1).fillna(0).reset_index()
+                     .merge(sku_status, on="sku_filho", how="left"))
+    estoque_amplo["status"] = estoque_amplo["status"].fillna("—")
+    estoque_amplo = estoque_amplo[(estoque_amplo["qtd_cd"] > 0)
+                                  | (estoque_amplo["qtd_lojas"] > 0)]
+    estoque_amplo[["qtd_cd", "qtd_lojas"]] = estoque_amplo[["qtd_cd", "qtd_lojas"]].astype(int)
+
     # Filtra status permitidos para remanejamento.
     est = est[est["desc_status_produto"].isin(config.STATUS_ESTOQUE_PERMITIDOS)]
 
@@ -133,6 +178,10 @@ def _build_excel(hoje: date) -> dict[str, pd.DataFrame]:
     })
     vendas = vendas[vendas["qtd"] > 0]
 
+    # --- Pais com QUALQUER venda histórica (2022 -> hoje) -----------------
+    pais_com_venda = pd.DataFrame({"sku_pai": sorted(
+        set(_pais_venda_hist()["sku_pai"]) | set(vendas["sku_pai"].unique()))})
+
     # --- Recebimento: snapshot (quando maduro) OU dt_envio + leadtime ----
     receb_envio = estoque_loja[["loja", "sku_filho"]].merge(
         produtos[["sku_filho", "dt_envio"]], on="sku_filho", how="left")
@@ -158,6 +207,8 @@ def _build_excel(hoje: date) -> dict[str, pd.DataFrame]:
         "vendas": vendas,
         "recebimento": recebimento,
         "skus_permitidos": skus_permitidos,
+        "estoque_amplo": estoque_amplo,
+        "pais_com_venda": pais_com_venda,
     }
 
 
@@ -203,7 +254,21 @@ def carregar_mock(hoje: date | None = None) -> dict[str, pd.DataFrame]:
           "materia": "Não informado", "foto_url": ""}
          for pai in pais for tam in tamanhos]
     )
+    # dt_envio: P105 fica sem (caso negativo do filtro do abastecimento CD).
+    produtos["dt_envio"] = produtos["sku_pai"].map(
+        lambda p: pd.NaT if p == "P105" else pd.Timestamp(hoje - timedelta(days=60)))
     filhos = produtos["sku_filho"].tolist()
+
+    # Filho RECOMPRA parado no CD (só para a aba Alertas; fora de skus_permitidos).
+    parado = pd.DataFrame([{
+        "sku_filho": "P900-U", "sku_pai": "P900", "descricao": "Produto P900 tam U",
+        "tamanho": "U", "linha": "HOME", "colecao": "INVERNO 2026",
+        "status": "RECOMPRA", "grupo": "GRUPO Home", "subgrupo": "GERAL",
+        "grupo_limite": "Home", "grupo_merc": "GRUPO Home",
+        "materia": "Não informado", "foto_url": "",
+        "dt_envio": pd.Timestamp(hoje - timedelta(days=120)),
+    }])
+    produtos = pd.concat([produtos, parado], ignore_index=True)
 
     estoque_rows = []
     for loja in lojas:
@@ -245,10 +310,23 @@ def carregar_mock(hoje: date | None = None) -> dict[str, pd.DataFrame]:
                   for _, r in estoque_loja.iterrows()]
     recebimento = pd.DataFrame(receb_rows)
 
+    # Estoque amplo: foto CD x lojas de todos os filhos + o RECOMPRA parado.
+    ea = (estoque_cd.rename(columns={"qtd": "qtd_cd"})
+          .merge(estoque_loja.groupby("sku_filho")["qtd"].sum()
+                 .rename("qtd_lojas").reset_index(),
+                 on="sku_filho", how="outer").fillna(0))
+    ea = ea.merge(produtos[["sku_filho", "status"]], on="sku_filho", how="left")
+    ea.loc[len(ea)] = {"sku_filho": "P900-U", "qtd_cd": 7, "qtd_lojas": 0,
+                       "status": "RECOMPRA"}
+    ea[["qtd_cd", "qtd_lojas"]] = ea[["qtd_cd", "qtd_lojas"]].astype(int)
+    estoque_amplo = ea[(ea["qtd_cd"] > 0) | (ea["qtd_lojas"] > 0)].reset_index(drop=True)
+
     return {
         "produtos": produtos, "estoque_loja": estoque_loja, "estoque_cd": estoque_cd,
         "transito": transito, "vendas": vendas, "recebimento": recebimento,
         "skus_permitidos": pd.DataFrame({"sku_filho": filhos}),
+        "estoque_amplo": estoque_amplo,
+        "pais_com_venda": pd.DataFrame({"sku_pai": pais}),
     }
 
 
@@ -258,6 +336,9 @@ def carregar_mock(hoje: date | None = None) -> dict[str, pd.DataFrame]:
 # Tabelas gravadas pelo publica_supabase.py (mesmo contrato de saída).
 TABELAS = ["produtos", "estoque_loja", "estoque_cd", "transito",
            "vendas", "recebimento", "skus_permitidos"]
+# Tabelas novas (podem ainda não existir na nuvem antes da republicação):
+# lidas com tolerância a ausência; consumidores tratam None.
+TABELAS_NOVAS = ["pais_com_venda", "estoque_amplo"]
 
 
 def _segredo(nome: str) -> str:
@@ -301,6 +382,14 @@ def carregar_supabase(hoje: date | None = None) -> dict[str, pd.DataFrame]:
                 dados["curva"] = pd.read_sql(text("select * from curva_sazonal"), con)
             except Exception:
                 dados["curva"] = None
+                con.rollback()  # SELECT que falha aborta a transação no Postgres
+            # Tabelas novas: podem não existir antes da republicação diária.
+            for n in TABELAS_NOVAS:
+                try:
+                    dados[n] = pd.read_sql(text(f"select * from {n}"), con)
+                except Exception:
+                    dados[n] = None
+                    con.rollback()
     finally:
         eng.dispose()
 

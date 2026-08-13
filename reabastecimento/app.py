@@ -14,6 +14,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+import aderencia
 import config
 import data_source
 import engine
@@ -186,6 +187,11 @@ def _abastecimento(hoje_iso: str, janela: int, reserva: int, nao_recebem: tuple 
         reserva=reserva, nao_recebem=set(nao_recebem))
 
 
+@st.cache_data(show_spinner="Calculando alertas...")
+def _alerta_cd(hoje_iso: str):
+    return engine.alerta_parado_cd(_carregar(hoje_iso), config.data_referencia())
+
+
 dados = _carregar(hoje.isoformat())
 
 
@@ -327,6 +333,18 @@ ABAST_RENOME = {"loja_receptora": "Loja receptora", "linha": "Linha", "grupo": "
                 "sku_pai": "SKU pai", "sku_filho": "SKU filho", "tamanho": "Tamanho",
                 "qtd": "Qtd", "introducao": "Introdução", "parcial": "Parcial",
                 "score_receptora": "Score"}
+ALERTA_RENOME = {"linha": "Linha", "grupo": "Grupo", "subgrupo": "Subgrupo",
+                 "colecao": "Coleção", "status": "Status", "sku_pai": "SKU pai",
+                 "sku_filho": "SKU filho", "descricao": "Descrição",
+                 "tamanho": "Tamanho", "qtd_cd": "Qtd CD", "dt_envio": "Dt. envio",
+                 "dias_desde_envio": "Dias desde envio"}
+ADER_RENOME = {"loja_doadora": "Loja doadora", "loja_receptora": "Loja receptora",
+               "sku_pai": "SKU pai", "tamanho": "Tamanho", "sku_filho": "SKU filho",
+               "qtd": "Qtd", "data": "Data", "nao_saiu": "Na doadora",
+               "virou_venda": "Venda doadora", "transferido": "Transferido",
+               "transito_receptora": "Trânsito p/ receptora",
+               "estoque_receptora": "Estoque receptora",
+               "classificacao": "Classificação"}
 
 FILTROS_SUG = [("linha", "Linha"), ("grupo", "Grupo"), ("subgrupo", "Subgrupo"),
                ("colecao", "Coleção"), ("status", "Status"),
@@ -336,8 +354,9 @@ FILTROS_DIM = [("linha", "Linha"), ("grupo", "Grupo"), ("subgrupo", "Subgrupo"),
 
 _pop = st.popover if hasattr(st, "popover") else st.expander
 
-tab_sug, tab_cd, tab_rup, tab_ve = st.tabs(
-    ["Sugestões", "Abastecimento CD", "Ruptura e Cobertura", "Vendas × Estoque"])
+tab_sug, tab_cd, tab_rup, tab_ve, tab_alertas = st.tabs(
+    ["Sugestões", "Abastecimento CD", "Ruptura e Cobertura", "Vendas × Estoque",
+     "Alertas"])
 
 # ---------------------------------------------------------------------------
 with tab_sug:
@@ -807,3 +826,158 @@ with tab_ve:
         st.info("Sem dados para o filtro selecionado.")
     else:
         st.markdown(html, unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+with tab_alertas:
+    st.markdown('<div class="pg-titulo">Alertas</div>'
+                '<div class="pg-sub">Peças paradas no CD e conferência dos '
+                'remanejamentos executados.</div>', unsafe_allow_html=True)
+
+    # --- SKU filho parado no CD --------------------------------------------
+    st.markdown(f'<div style="font-size:16px;font-weight:600;color:{COR["texto"]};'
+                'margin:10px 0 2px">SKU filho parado no CD</div>',
+                unsafe_allow_html=True)
+    st.caption("SKU filho com estoque no CD, ZERO peças em loja e pai já enviado "
+               "(dt_envio preenchida). Status monitorados: "
+               + " · ".join(sorted(config.STATUS_ALERTA_CD)) + ".")
+
+    al = _alerta_cd(hoje.isoformat())
+    if dados.get("estoque_amplo") is None:
+        st.info("Alerta indisponível nesta fonte: a tabela `estoque_amplo` ainda "
+                "não foi publicada na nuvem (rode o publica_supabase / aguarde a "
+                "carga diária).")
+    elif al.empty:
+        st.success("Nenhum SKU filho parado no CD pelos critérios atuais.")
+    else:
+        filtros_al = _linha_filtros(al, FILTROS_DIM, "fal")
+        vl = _aplica(al, filtros_al)
+        ativo_al = any(filtros_al.values())
+
+        b1, b2, b3, b4 = st.columns(4)
+        card(b1, "SKUs parados no CD", _fmt(vl["sku_filho"].nunique()),
+             "filtros ativos" if ativo_al else "sem estoque em nenhuma loja",
+             COR["alerta"])
+        card(b2, "Peças paradas", _fmt(int(vl["qtd_cd"].sum())),
+             "estoque no CD desses SKUs")
+        card(b3, "SKUs pai afetados", _fmt(vl["sku_pai"].nunique()),
+             "produtos já lançados")
+        card(b4, "Dias desde envio (mediana)",
+             _fmt(int(vl["dias_desde_envio"].median())) if len(vl) else "—",
+             "do pai mais recente")
+        st.write("")
+
+        cl_conta, cl_limpa, cl_csv = st.columns([4.6, 1.1, 1.3])
+        cl_conta.markdown(f'<div class="conta">{_fmt(len(vl))} de {_fmt(len(al))} '
+                          'SKUs</div>', unsafe_allow_html=True)
+        if ativo_al:
+            cl_limpa.button("Limpar filtros", on_click=_limpar_filtros,
+                            args=("fal", FILTROS_DIM), use_container_width=True,
+                            key="limpa_fal")
+        csv_al = (vl.rename(columns=ALERTA_RENOME)
+                  .to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"))
+        cl_csv.download_button("Exportar CSV", data=csv_al,
+                               file_name="alerta_parado_cd.csv", mime="text/csv",
+                               use_container_width=True, type="primary",
+                               key="csv_fal")
+
+        st.markdown(_tabela_html(
+            vl.rename(columns=ALERTA_RENOME), altura=420,
+            fmt={"Dt. envio": lambda d: pd.Timestamp(d).strftime("%d/%m/%Y"),
+                 "Qtd CD": lambda x: _fmt(x),
+                 "Dias desde envio": lambda x: _fmt(x)},
+            css={"Qtd CD": lambda _: _DIR,
+                 "Dias desde envio": lambda x: (
+                     f"color:{COR['alerta']};font-weight:600;{_DIR}"
+                     if int(x) >= 90 else _DIR),
+                 "SKU pai": lambda _: _MONO, "SKU filho": lambda _: _MONO,
+                 "Tamanho": lambda _: "text-align:center"}),
+            unsafe_allow_html=True)
+
+        st.download_button(
+            "Baixar Excel completo (todos os SKUs parados)",
+            data=_excel_bytes({"parado_cd": al.rename(columns=ALERTA_RENOME)}),
+            file_name="alerta_parado_cd.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="xlsx_fal")
+
+    # --- Aderência de remanejamento ----------------------------------------
+    st.write("")
+    st.markdown(f'<div style="font-size:16px;font-weight:600;color:{COR["texto"]};'
+                'margin:14px 0 2px">Aderência de remanejamento</div>',
+                unsafe_allow_html=True)
+    st.caption("Suba o CSV do remanejamento solicitado — colunas separadas por ';': "
+               "loja doadora; loja receptora; sku pai; tamanho; qtd; data "
+               "(dd/mm/aaaa). Estimativa: o que ainda está na doadora não saiu; o "
+               "que ela vendeu desde a data conta como venda; o restante é "
+               "considerado transferido. Trânsito e estoque da receptora são "
+               "evidência de chegada (o trânsito não tem data, pode ser de outro "
+               "movimento).")
+
+    arq = st.file_uploader("CSV do remanejamento", type=["csv"],
+                           key="upload_aderencia")
+    if arq is not None:
+        try:
+            cru = aderencia.ler_csv(arq.getvalue())
+        except ValueError as e:
+            st.error(str(e))
+            cru = None
+        if cru is not None:
+            lojas_conhecidas = (set(dados["estoque_loja"]["loja"])
+                                | set(dados["vendas"]["loja"]))
+            validas, invalidas = aderencia.validar(cru, dados["produtos"],
+                                                   lojas_conhecidas, hoje)
+            res = aderencia.calcular(validas, dados["estoque_loja"],
+                                     dados["transito"], dados["vendas"])
+            k = res["kpis"]
+
+            d1, d2, d3, d4 = st.columns(4)
+            tem = k["linhas"] > 0
+            card(d1, "Score de aderência", _pct(100 * k["score"]) if tem else "—",
+                 "média de % peças e % SKUs",
+                 (COR["acento"] if k["score"] >= 0.7 else COR["alerta"]) if tem else None)
+            card(d2, "% Peças atendidas", _pct(100 * k["pct_pecas"]) if tem else "—",
+                 f"{_fmt(k['pecas_transferidas'])} de "
+                 f"{_fmt(k['pecas_solicitadas'])} peças")
+            card(d3, "% SKUs atendidos", _pct(100 * k["pct_skus"]) if tem else "—",
+                 f"{_fmt(k['linhas_atendidas'])} de {_fmt(k['linhas'])} linhas 100% "
+                 "atendidas")
+            card(d4, "Linhas inválidas", _fmt(len(invalidas)),
+                 "ignoradas no cálculo",
+                 COR["alerta"] if len(invalidas) else None)
+            st.write("")
+
+            if not res["detalhe"].empty:
+                _css_classif = {
+                    "Atendido": f"color:{COR['acento']};font-weight:600",
+                    "Parcial": f"color:{COR['alerta']};font-weight:600",
+                    "Venda na doadora": f"color:{COR['alerta']}",
+                    "Não atendido": f"color:{COR['alerta']};font-weight:700",
+                }
+                st.markdown(_tabela_html(
+                    res["detalhe"].rename(columns=ADER_RENOME), altura=420,
+                    fmt={"Data": lambda d: pd.Timestamp(d).strftime("%d/%m/%Y")},
+                    css={"Classificação": lambda x: _css_classif.get(str(x), ""),
+                         "SKU pai": lambda _: _MONO, "SKU filho": lambda _: _MONO,
+                         "Qtd": lambda _: _DIR, "Na doadora": lambda _: _DIR,
+                         "Venda doadora": lambda _: _DIR,
+                         "Transferido": lambda _: _DIR,
+                         "Trânsito p/ receptora": lambda _: _DIR,
+                         "Estoque receptora": lambda _: _DIR,
+                         "Tamanho": lambda _: "text-align:center"}),
+                    unsafe_allow_html=True)
+                csv_det = (res["detalhe"].rename(columns=ADER_RENOME)
+                           .to_csv(index=False, sep=";", decimal=",")
+                           .encode("utf-8-sig"))
+                st.download_button("Exportar resultado (CSV)", data=csv_det,
+                                   file_name="aderencia_remanejamento.csv",
+                                   mime="text/csv", type="primary", key="csv_ader")
+
+            if not invalidas.empty:
+                with st.expander(f"Linhas inválidas ({_fmt(len(invalidas))})"):
+                    st.markdown(_tabela_html(invalidas, altura=300),
+                                unsafe_allow_html=True)
+                    csv_inv = (invalidas.to_csv(index=False, sep=";", decimal=",")
+                               .encode("utf-8-sig"))
+                    st.download_button("Baixar linhas inválidas", data=csv_inv,
+                                       file_name="aderencia_invalidas.csv",
+                                       mime="text/csv", key="csv_ader_inv")

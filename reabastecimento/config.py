@@ -69,6 +69,10 @@ MAPA_LINHA_GRUPO = {
 # OUTLET e demais (CANCELADO, RECOMPRA, etc.) ficam de fora.
 STATUS_ESTOQUE_PERMITIDOS = {"NOVIDADE", "PERENE", "LIQUIDAÇÃO", "MIGRADO"}
 
+# Status monitorados no alerta "SKU filho parado no CD" (aba Alertas).
+# Inclui RECOMPRA e ETIQUETA CINZA, que ficam FORA do remanejamento.
+STATUS_ALERTA_CD = {"PERENE", "NOVIDADE", "MIGRADO", "RECOMPRA", "ETIQUETA CINZA"}
+
 # Marcas de loja excluídas como doadora e como receptora (ex.: Outlet Alexânia).
 EXCLUIR_MARCAS_LOJA = {"OUTLET"}
 
@@ -171,6 +175,8 @@ ARQS_VENDAS = [
     PASTA_BASES / "Base_2024.xlsx", PASTA_BASES / "Base_2025.xlsx",
     PASTA_BASES / "Base_2026.xlsx",
 ]
+# Anos fechados (imutáveis): lidos uma única vez e cacheados em parquet.
+ARQS_VENDAS_FECHADOS = ARQS_VENDAS[:-1]
 
 # Localidades do CD consideradas "estoque disponível para repor a loja".
 # Se o item existir aqui (qtde>0), NÃO sugerimos transferência entre lojas.
