@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Souq · Dash Operacional E-commerce</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="data.js"></script>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --ink:#1a1d24; --mut:#6b7280; --brand:#1f3864; --ok:#16a34a; --warn:#d97706; --bad:#dc2626; --line:#e5e7eb; }
+  * { box-sizing:border-box; margin:0; }
+  body { font:14px/1.45 'Segoe UI',Arial,sans-serif; background:var(--bg); color:var(--ink); padding:20px 26px; }
+  h1 { font-size:20px; } .sub { color:var(--mut); font-size:12.5px; margin-top:2px; }
+  .tabs { display:flex; gap:6px; margin:16px 0 4px; border-bottom:2px solid var(--line); }
+  .tab { padding:9px 18px; border-radius:8px 8px 0 0; cursor:pointer; font-weight:600; color:var(--mut); }
+  .tab.on { background:var(--brand); color:#fff; }
+  .filters { display:flex; gap:10px; flex-wrap:wrap; margin:16px 0; }
+  .filters label { font-size:11px; color:var(--mut); display:block; margin-bottom:3px; text-transform:uppercase; letter-spacing:.4px; }
+  .filters select { padding:7px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; min-width:150px; font-size:13px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:16px; }
+  .card { background:var(--card); border-radius:12px; padding:14px 16px; box-shadow:0 1px 3px rgba(0,0,0,.07); }
+  .card .v { font-size:26px; font-weight:700; margin-top:2px; } .card .l { color:var(--mut); font-size:12px; }
+  .card .d { font-size:11.5px; margin-top:2px; }
+  .up { color:var(--ok); } .down { color:var(--bad); } .flat { color:var(--mut); }
+  .grid { display:grid; grid-template-columns:1.25fr 1fr; gap:12px; margin-bottom:16px; }
+  @media (max-width:1100px){ .grid { grid-template-columns:1fr; } }
+  .panel { background:var(--card); border-radius:12px; padding:16px; box-shadow:0 1px 3px rgba(0,0,0,.07); }
+  .panel h2 { font-size:14px; margin-bottom:10px; }
+  .panel .hint { font-size:11.5px; color:var(--mut); margin-top:6px; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th { text-align:left; color:var(--mut); font-weight:600; border-bottom:2px solid var(--line); padding:6px 8px; cursor:pointer; white-space:nowrap; }
+  td { border-bottom:1px solid var(--line); padding:6px 8px; }
+  tr:hover td { background:#f9fafb; }
+  .pct { font-weight:700; } .pill { display:inline-block; padding:1px 8px; border-radius:99px; font-size:11px; background:#eef2f7; }
+  a { color:var(--brand); }
+  .tbl-top { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:8px; flex-wrap:wrap; }
+  .tbl-top input { padding:7px 10px; border:1px solid var(--line); border-radius:8px; width:260px; }
+  .btn-csv { padding:7px 14px; border:1px solid var(--brand); border-radius:8px; background:#fff; color:var(--brand); font-weight:600; font-size:12.5px; cursor:pointer; }
+  .btn-csv:hover { background:var(--brand); color:#fff; }
+  .muted { color:var(--mut); font-size:12px; }
+  .chips { display:flex; gap:6px; flex-wrap:wrap; }
+  .chip { font-size:11.5px; background:#eef2f7; border-radius:99px; padding:2px 10px; cursor:pointer; border:1px solid transparent; }
+  .chip.on { background:var(--brand); color:#fff; }
+  .hide { display:none; }
+</style>
+</head>
+<body>
+<h1>Dash Operacional E-commerce — Souq</h1>
+<div class="sub">Fonte: souqstore.com.br × Base_Produtos × Base_Estoque · Atualizado em <span id="upd"></span></div>
+
+<div class="tabs">
+  <div class="tab on" data-v="comp">Completeness do Catálogo</div>
+  <div class="tab" data-v="disp">Disponibilidade de Produtos</div>
+</div>
+
+<!-- ================= COMPLETENESS ================= -->
+<div id="view-comp">
+<div class="filters">
+  <div><label>Departamento</label><select id="f-dept"></select></div>
+  <div><label>Categoria no site</label><select id="f-cat"></select></div>
+  <div><label>Coleção</label><select id="f-col"></select></div>
+  <div><label>Tipo de produto</label><select id="f-tipo"></select></div>
+  <div><label>Status</label><select id="f-status"></select></div>
+</div>
+<div class="cards" id="cards"></div>
+<div class="grid">
+  <div class="panel">
+    <h2>Evolução do % de completeness</h2>
+    <div class="chips" id="chips"></div>
+    <canvas id="ch-evo" height="120"></canvas>
+    <div class="hint">Clique nos chips para adicionar/remover campos. "Média" = média dos campos ativos (Alt-text fora do cálculo).</div>
+  </div>
+  <div class="panel">
+    <h2>% de completeness por campo (hoje)</h2>
+    <canvas id="ch-bar" height="240"></canvas>
+  </div>
+</div>
+<div class="panel">
+  <div class="tbl-top">
+    <h2>Produtos com informação faltante <span class="muted" id="tbl-n"></span></h2>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <select id="f-campo" style="padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;font-size:13px"></select>
+      <input id="busca" placeholder="Buscar produto…">
+      <button class="btn-csv" id="csv-comp">⬇ CSV</button>
+    </div>
+  </div>
+  <div style="max-height:520px;overflow:auto">
+  <table id="tbl">
+    <thead><tr>
+      <th data-k="titulo">Produto</th><th data-k="cat">Categoria</th><th data-k="colecao">Coleção</th>
+      <th data-k="tipo">Tipo</th><th data-k="status">Status</th><th data-k="preco">Preço</th>
+      <th data-k="pct">% Compl.</th><th>Campos faltantes</th><th></th>
+    </tr></thead><tbody></tbody>
+  </table>
+  </div>
+</div>
+</div>
+
+<!-- ================= DISPONIBILIDADE ================= -->
+<div id="view-disp" class="hide">
+<div class="filters">
+  <div><label>Coleção</label><select id="d-col"></select></div>
+  <div><label>Linha</label><select id="d-linha"></select></div>
+  <div><label>Grupo</label><select id="d-grupo"></select></div>
+  <div><label>Subgrupo</label><select id="d-sub"></select></div>
+  <div><label>Status</label><select id="d-status"></select></div>
+  <div><label>Grade</label><select id="d-grade">
+    <option value="">Todas</option><option value="1">Completa</option><option value="0">Quebrada</option></select></div>
+  <div><label>Presença no site</label><select id="d-pres">
+    <option value="">Todos</option><option value="0">Fora do site</option><option value="1">No site</option></select></div>
+  <div><label>Foto (pasta MKT)</label><select id="d-foto">
+    <option value="">Todos</option><option value="1">Com foto</option><option value="0">Sem foto</option></select></div>
+</div>
+<div class="cards" id="d-cards"></div>
+<div class="grid">
+  <div class="panel">
+    <h2>Evolução da disponibilidade no site</h2>
+    <canvas id="d-evo" height="120"></canvas>
+    <div class="hint">% dos candidatos (estoque ≥ 2, exceto Iguatemi SP, Defeitos e Recebimento) publicados no site.</div>
+  </div>
+  <div class="panel">
+    <h2>% no site por coleção (hoje)</h2>
+    <canvas id="d-bar" height="240"></canvas>
+  </div>
+</div>
+<div class="panel">
+  <div class="tbl-top">
+    <h2 id="d-tbl-titulo">Candidatos fora do site <span class="muted" id="d-tbl-n"></span></h2>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input id="d-busca" placeholder="Buscar produto ou código…">
+      <button class="btn-csv" id="csv-disp">⬇ CSV</button>
+    </div>
+  </div>
+  <div style="max-height:520px;overflow:auto">
+  <table id="d-tbl">
+    <thead><tr>
+      <th data-k="item">Produto</th><th data-k="pai">Código</th><th data-k="colecao">Coleção</th>
+      <th data-k="linha">Linha</th><th data-k="subgrupo">Subgrupo</th><th data-k="cor">Cor</th>
+      <th data-k="status">Status</th><th data-k="preco">Preço Tab.</th><th data-k="dt_envio">Dt. Envio</th>
+      <th data-k="qtde">Estoque</th>
+      <th data-k="qtde_cd">CD Vendas</th><th data-k="n_filiais">Filiais</th><th data-k="grade_pct">Grade</th>
+      <th data-k="tem_foto">Foto</th>
+      <th data-k="no_site">Site</th>
+    </tr></thead><tbody></tbody>
+  </table>
+  </div>
+  <div class="hint">Grade = % dos tamanhos cadastrados com estoque. Ordene clicando nos cabeçalhos.</div>
+</div>
+</div>
+
+<script>
+const D = window.DADOS, C = D.campos, NF = C.length;
+const EXCL = new Set(['Alt-text Imagens']);           // campos fora do cálculo (continuam coletados)
+const AI = C.map((c,i)=>i).filter(i => !EXCL.has(C[i])); // índices ativos
+const NA = AI.length;
+document.getElementById('upd').textContent = D.atualizado;
+const asObj = (rows, cols) => rows.map(r => { const o = {}; cols.forEach((c,i) => o[c] = r[i]); return o; });
+
+/* ============ EXPORT CSV ============ */
+function baixarCSV(nome, cols, rows) {
+  const esc = v => { v = v==null ? '' : String(v); return /[;"\n]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; };
+  const num = v => typeof v==='number' ? String(v).replace('.', ',') : esc(v);
+  const csv = '﻿' + cols.map(c=>c[0]).join(';') + '\n' +
+    rows.map(r => cols.map(c => num(typeof c[1]==='function' ? c[1](r) : r[c[1]])).join(';')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8'}));
+  a.download = nome + '_' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click(); URL.revokeObjectURL(a.href);
+}
+let lastCompRows = [], lastDispRows = [];
+
+/* ============ ABAS ============ */
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === t));
+  document.getElementById('view-comp').classList.toggle('hide', t.dataset.v !== 'comp');
+  document.getElementById('view-disp').classList.toggle('hide', t.dataset.v !== 'disp');
+});
+
+/* ============ COMPLETENESS ============ */
+const hi = Object.fromEntries(D.hist_cols.map((c,i)=>[c,i]));
+const HIST = D.hist;
+const DET = asObj(D.det, D.det_cols).map(o => { o.f = [...o.flags].map(Number); o.pct = AI.reduce((a,i)=>a+o.f[i],0)/NA; return o; });
+const DIMS = [['f-dept','dept'],['f-cat','cat'],['f-col','colecao'],['f-tipo','tipo'],['f-status','status']];
+const st = { dept:'', cat:'', colecao:'', tipo:'', status:'', busca:'', campo:'', sort:'pct', asc:true, series:new Set(['__media','Descrição']) };
+document.getElementById('f-campo').innerHTML = '<option value="">Campo faltante: todos</option>' +
+  AI.map(i=>`<option value="${C[i]}">Falta: ${C[i]}</option>`).join('');
+document.getElementById('f-campo').onchange = e => { st.campo = e.target.value; render(); };
+let chEvo, chBar;
+
+function render() {
+  DIMS.forEach(([id,k]) => {
+    const sel = document.getElementById(id), cur = st[k];
+    const vals = [...new Set(DET.filter(r => DIMS.every(([_,k2]) => k2===k || !st[k2] || r[k2]===st[k2])).map(r=>r[k]))].sort();
+    sel.innerHTML = '<option value="">Todas</option>' + vals.map(v=>`<option${v===cur?' selected':''}>${v}</option>`).join('');
+  });
+  const det = DET.filter(r => DIMS.every(([_,k]) => !st[k] || r[k]===st[k]));
+  const hist = HIST.filter(r => DIMS.every(([_,k]) => !st[k] || r[hi[k]]===st[k]));
+  const datas = [...new Set(hist.map(r=>r[hi.data]))].sort();
+  const porData = datas.map(dt => {
+    const rs = hist.filter(r=>r[hi.data]===dt), n = rs.reduce((a,r)=>a+r[hi.n],0);
+    const sums = C.map((_,i)=>rs.reduce((a,r)=>a+r[hi['s'+i]],0));
+    return { dt, n, pct: sums.map(s=>n?s/n:0), media: n ? AI.reduce((a,i)=>a+sums[i],0)/(n*NA) : 0 };
+  });
+  const hoje = porData[porData.length-1], ontem = porData.length>1 ? porData[porData.length-2] : null;
+  const pctF = v => (v*100).toFixed(1)+'%';
+  const delta = (a,b,fmt) => b==null ? '' : (d => `<span class="${d>0.0005?'up':d<-0.0005?'down':'flat'}">${d>0?'▲':d<0?'▼':'•'} ${fmt(Math.abs(d))} vs dia anterior</span>`)(a-b);
+  document.getElementById('cards').innerHTML = `
+    <div class="card"><div class="l">Produtos no site (filtro)</div><div class="v">${det.length.toLocaleString('pt-BR')}</div>
+      <div class="d">${delta(hoje?.n??0, ontem?.n, v=>v.toLocaleString('pt-BR'))}</div></div>
+    <div class="card"><div class="l">% completeness média</div><div class="v">${pctF(hoje?.media??0)}</div>
+      <div class="d">${delta(hoje?.media??0, ontem?.media, pctF)}</div></div>
+    <div class="card"><div class="l">Sem descrição</div><div class="v">${det.filter(r=>!r.f[0]).length.toLocaleString('pt-BR')}</div></div>
+    <div class="card"><div class="l">Com menos de 3 fotos</div><div class="v">${det.filter(r=>!r.f[7]).length.toLocaleString('pt-BR')}</div></div>
+    <div class="card"><div class="l">Sem cor na descrição</div><div class="v">${det.filter(r=>!r.f[3]).length.toLocaleString('pt-BR')}</div></div>
+    <div class="card"><div class="l">Sem medidas</div><div class="v">${det.filter(r=>!r.f[4]).length.toLocaleString('pt-BR')}</div></div>`;
+  document.getElementById('chips').innerHTML =
+    ['__media', ...C.filter(c=>!EXCL.has(c))].map(c => `<span class="chip${st.series.has(c)?' on':''}" data-c="${c}">${c==='__media'?'Média':c}</span>`).join('');
+  document.querySelectorAll('#chips .chip').forEach(el => el.onclick = () => {
+    const c = el.dataset.c; st.series.has(c) ? st.series.delete(c) : st.series.add(c); render(); });
+  const cores = ['#1f3864','#d97706','#16a34a','#dc2626','#7c3aed','#0891b2','#be185d','#4d7c0f','#b45309','#1d4ed8','#9333ea','#0f766e','#c2410c','#334155','#65a30d'];
+  const ds = [...st.series].map((c,ix) => ({ label: c==='__media'?`Média (${NA} campos)`:c,
+    data: porData.map(p => c==='__media' ? p.media*100 : p.pct[C.indexOf(c)]*100),
+    borderColor: cores[ix%cores.length], backgroundColor: cores[ix%cores.length], tension:.25, pointRadius:3 }));
+  if (chEvo) chEvo.destroy();
+  chEvo = new Chart(document.getElementById('ch-evo'), { type:'line',
+    data:{ labels: datas.map(d=>d.split('-').reverse().slice(0,2).join('/')), datasets: ds },
+    options:{ scales:{ y:{ min:0, max:100, ticks:{ callback:v=>v+'%' } } },
+      plugins:{ legend:{ labels:{ boxWidth:12, font:{ size:11 } } } } } });
+  const barVals = AI.map(i=> det.length ? det.reduce((a,r)=>a+r.f[i],0)/det.length*100 : 0);
+  if (chBar) chBar.destroy();
+  chBar = new Chart(document.getElementById('ch-bar'), { type:'bar',
+    data:{ labels:AI.map(i=>C[i]), datasets:[{ data:barVals, backgroundColor: barVals.map(v=>v>=90?'#16a34a':v>=60?'#d97706':'#dc2626') }] },
+    options:{ indexAxis:'y', scales:{ x:{ min:0, max:100, ticks:{ callback:v=>v+'%' } } }, plugins:{ legend:{ display:false } } } });
+  let rows = det.filter(r => r.pct < 1);
+  if (st.campo) rows = rows.filter(r => !r.f[C.indexOf(st.campo)]);
+  if (st.busca) rows = rows.filter(r => r.titulo.toLowerCase().includes(st.busca));
+  rows.sort((a,b) => { const k=st.sort, va=a[k], vb=b[k];
+    return (typeof va==='number' ? va-vb : String(va).localeCompare(String(vb))) * (st.asc?1:-1); });
+  lastCompRows = rows;
+  document.getElementById('tbl-n').textContent = `(${rows.length.toLocaleString('pt-BR')} produtos)`;
+  document.querySelector('#tbl tbody').innerHTML = rows.slice(0,800).map(r => `<tr>
+    <td>${r.titulo}</td><td>${r.cat}</td><td>${r.colecao}</td><td><span class="pill">${r.tipo}</span></td>
+    <td>${r.status}</td><td>R$ ${Number(r.preco).toLocaleString('pt-BR',{minimumFractionDigits:2})}</td>
+    <td class="pct" style="color:${r.pct>=.9?'var(--ok)':r.pct>=.6?'var(--warn)':'var(--bad)'}">${(r.pct*100).toFixed(0)}%</td>
+    <td>${AI.filter(i=>!r.f[i]).map(i=>C[i]).join(', ')}</td>
+    <td><a href="${r.url}" target="_blank">abrir</a></td></tr>`).join('');
+}
+DIMS.forEach(([id,k]) => document.getElementById(id).onchange = e => { st[k] = e.target.value; render(); });
+document.getElementById('busca').oninput = e => { st.busca = e.target.value.toLowerCase(); render(); };
+document.querySelectorAll('#tbl th[data-k]').forEach(th => th.onclick = () => {
+  const k = th.dataset.k; st.asc = st.sort===k ? !st.asc : true; st.sort = k; render(); });
+document.getElementById('csv-comp').onclick = () => baixarCSV('completeness', [
+  ['Produto','titulo'], ['Categoria','cat'], ['Coleção','colecao'], ['Tipo','tipo'], ['Status','status'],
+  ['Preço','preco'], ['% Compl.', r=>Math.round(r.pct*100)], ['Campos faltantes', r=>AI.filter(i=>!r.f[i]).map(i=>C[i]).join(', ')],
+  ['URL','url']], lastCompRows);
+render();
+
+/* ============ DISPONIBILIDADE ============ */
+const DISP = asObj(D.disp || [], D.disp_cols || []);
+const FOTO_BASE = 'file:///C:/Users/LeandroDias/OneDrive%20-%20wbgretail.com.br/Marketing%20-%20COLE%C3%87%C3%83O%2028%20-%20INVERNO%2026%20-%20MONDO/';
+const hdI = Object.fromEntries((D.hist_disp_cols || []).map((c,i)=>[c,i]));
+const HDISP = D.hist_disp || [];
+const DDIMS = [['d-col','colecao'],['d-linha','linha'],['d-grupo','grupo'],['d-sub','subgrupo'],['d-status','status']];
+const ds2 = { colecao:'', linha:'', grupo:'', subgrupo:'', status:'', grade:'', pres:'', foto:'', busca:'', sort:'qtde', asc:false };
+let dEvo, dBar;
+
+function renderD() {
+  DDIMS.forEach(([id,k]) => {
+    const sel = document.getElementById(id), cur = ds2[k];
+    const vals = [...new Set(DISP.filter(r => DDIMS.every(([_,k2]) => k2===k || !ds2[k2] || r[k2]===ds2[k2])).map(r=>r[k]))].sort();
+    sel.innerHTML = '<option value="">Todas</option>' + vals.map(v=>`<option${v===cur?' selected':''}>${v}</option>`).join('');
+  });
+  const fil = r => DDIMS.every(([_,k]) => !ds2[k] || r[k]===ds2[k])
+    && (ds2.grade==='' || String(r.grade_completa)===ds2.grade)
+    && (ds2.foto==='' || String(r.tem_foto)===ds2.foto);
+  const cand = DISP.filter(fil);
+  const noSite = cand.filter(r=>r.no_site===1), fora = cand.filter(r=>r.no_site===0);
+  const pctF = v => (v*100).toFixed(1)+'%';
+  document.getElementById('d-cards').innerHTML = `
+    <div class="card"><div class="l">Candidatos (estoque ≥ 2)</div><div class="v">${cand.length.toLocaleString('pt-BR')}</div></div>
+    <div class="card"><div class="l">Publicados no site</div><div class="v">${noSite.length.toLocaleString('pt-BR')}</div></div>
+    <div class="card"><div class="l">% disponibilidade</div><div class="v">${cand.length?pctF(noSite.length/cand.length):'—'}</div></div>
+    <div class="card"><div class="l">Fora do site</div><div class="v" style="color:var(--bad)">${fora.length.toLocaleString('pt-BR')}</div></div>
+    <div class="card"><div class="l">Fora do site c/ grade completa</div><div class="v">${fora.filter(r=>r.grade_completa===1).length.toLocaleString('pt-BR')}</div></div>
+    <div class="card"><div class="l">Unidades fora do site</div><div class="v">${fora.reduce((a,r)=>a+r.qtde,0).toLocaleString('pt-BR')}</div></div>`;
+  // evolução
+  const hh = HDISP.filter(r => DDIMS.every(([_,k]) => !ds2[k] || r[hdI[k]]===ds2[k])
+    && (ds2.grade==='' || String(r[hdI.grade_completa])===ds2.grade));
+  const datas = [...new Set(hh.map(r=>r[hdI.data]))].sort();
+  const serie = datas.map(dt => {
+    const rs = hh.filter(r=>r[hdI.data]===dt);
+    const n = rs.reduce((a,r)=>a+r[hdI.n_cand],0), s = rs.reduce((a,r)=>a+r[hdI.n_site],0);
+    return n ? s/n*100 : 0;
+  });
+  if (dEvo) dEvo.destroy();
+  dEvo = new Chart(document.getElementById('d-evo'), { type:'line',
+    data:{ labels: datas.map(d=>d.split('-').reverse().slice(0,2).join('/')),
+      datasets:[{ label:'% candidatos no site', data:serie, borderColor:'#1f3864', backgroundColor:'#1f3864', tension:.25, pointRadius:3 }] },
+    options:{ scales:{ y:{ min:0, max:100, ticks:{ callback:v=>v+'%' } } } } });
+  // barras por coleção
+  const porCol = {};
+  cand.forEach(r => { const c = porCol[r.colecao] ??= {n:0,s:0}; c.n++; c.s += r.no_site; });
+  const cols = Object.entries(porCol).filter(([_,v])=>v.n>=5).sort((a,b)=>b[1].n-a[1].n).slice(0,14);
+  if (dBar) dBar.destroy();
+  dBar = new Chart(document.getElementById('d-bar'), { type:'bar',
+    data:{ labels: cols.map(([k,v])=>`${k} (${v.n})`), datasets:[{ data: cols.map(([_,v])=>v.s/v.n*100),
+      backgroundColor: cols.map(([_,v])=>{const p=v.s/v.n*100; return p>=80?'#16a34a':p>=50?'#d97706':'#dc2626';}) }] },
+    options:{ indexAxis:'y', scales:{ x:{ min:0, max:100, ticks:{ callback:v=>v+'%' } } }, plugins:{ legend:{ display:false } } } });
+  // tabela
+  let rows = ds2.pres==='' ? fora : cand.filter(r=>String(r.no_site)===ds2.pres);
+  document.getElementById('d-tbl-titulo').childNodes[0].textContent =
+    ds2.pres==='1' ? 'Candidatos no site ' : ds2.pres==='0' || ds2.pres==='' ? 'Candidatos fora do site ' : 'Candidatos ';
+  if (ds2.busca) rows = rows.filter(r => (r.item+' '+r.pai).toLowerCase().includes(ds2.busca));
+  rows = [...rows].sort((a,b) => { const k=ds2.sort, va=a[k], vb=b[k];
+    return (typeof va==='number' ? va-vb : String(va).localeCompare(String(vb))) * (ds2.asc?1:-1); });
+  lastDispRows = rows;
+  document.getElementById('d-tbl-n').textContent = `(${rows.length.toLocaleString('pt-BR')} produtos)`;
+  document.querySelector('#d-tbl tbody').innerHTML = rows.slice(0,800).map(r => `<tr>
+    <td>${r.item}</td><td class="muted">${r.pai}</td><td>${r.colecao}</td><td><span class="pill">${r.linha}</span></td>
+    <td>${r.subgrupo}</td><td>${r.cor}</td><td>${r.status}</td>
+    <td>R$ ${Number(r.preco).toLocaleString('pt-BR',{minimumFractionDigits:2})}</td>
+    <td class="muted">${r.dt_envio ? String(r.dt_envio).slice(0,10).split('-').reverse().join('/') : '—'}</td>
+    <td class="pct">${r.qtde.toLocaleString('pt-BR')}</td><td>${r.qtde_cd.toLocaleString('pt-BR')}</td>
+    <td>${r.n_filiais}</td>
+    <td class="pct" style="color:${r.grade_pct>=1?'var(--ok)':r.grade_pct>=.5?'var(--warn)':'var(--bad)'}">${(r.grade_pct*100).toFixed(0)}%</td>
+    <td>${r.tem_foto ? `<a href="fotos_thumb/${r.pai}.jpg" target="_blank" title="${r.foto_arq||''} — original na pasta MONDO">📷</a>` : '—'}</td>
+    <td>${r.no_site ? '✓' : '—'}</td></tr>`).join('');
+}
+DDIMS.forEach(([id,k]) => document.getElementById(id).onchange = e => { ds2[k] = e.target.value; renderD(); });
+document.getElementById('d-grade').onchange = e => { ds2.grade = e.target.value; renderD(); };
+document.getElementById('d-pres').onchange = e => { ds2.pres = e.target.value; renderD(); };
+document.getElementById('d-foto').onchange = e => { ds2.foto = e.target.value; renderD(); };
+document.getElementById('d-busca').oninput = e => { ds2.busca = e.target.value.toLowerCase(); renderD(); };
+document.querySelectorAll('#d-tbl th[data-k]').forEach(th => th.onclick = () => {
+  const k = th.dataset.k; ds2.asc = ds2.sort===k ? !ds2.asc : false; ds2.sort = k; renderD(); });
+document.getElementById('csv-disp').onclick = () => baixarCSV('disponibilidade', [
+  ['Produto','item'], ['Código','pai'], ['Coleção','colecao'], ['Linha','linha'], ['Grupo','grupo'],
+  ['Subgrupo','subgrupo'], ['Cor','cor'], ['Status','status'], ['Preço Tab.','preco'], ['Dt. Envio','dt_envio'],
+  ['Estoque','qtde'], ['CD Vendas','qtde_cd'], ['Filiais','n_filiais'], ['Grade %', r=>Math.round(r.grade_pct*100)],
+  ['Tem foto', r=>r.tem_foto?'Sim':'Não'], ['Arquivo foto','foto_arq'], ['No site', r=>r.no_site?'Sim':'Não']], lastDispRows);
+renderD();
+</script>
+</body>
+</html>

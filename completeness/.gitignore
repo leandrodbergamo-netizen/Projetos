@@ -1,0 +1,28 @@
+# Credenciais e segredos — NUNCA versionar
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Dados de negócio (séries, snapshots e payloads gerados)
+*.csv
+*.xlsx
+*.xls
+data.js
+_cache_catalogo.json
+data/
+logs/
+
+# Fotos de produto (miniaturas geradas a partir da pasta do Marketing)
+static/thumbs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Sistema
+.DS_Store
+Thumbs.db

@@ -1,0 +1,14 @@
+[theme]
+base = "light"
+primaryColor = "#1f3864"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F7F8FA"
+textColor = "#1A1D24"
+font = "sans serif"
+
+[server]
+# Serve as miniaturas de static/thumbs direto pelo app (modo local).
+enableStaticServing = true
+
+[browser]
+gatherUsageStats = false
