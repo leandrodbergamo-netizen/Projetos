@@ -459,9 +459,12 @@ ALERTA_CD_COLS = ["linha", "grupo", "subgrupo", "colecao", "status", "sku_pai",
 
 
 def alerta_parado_cd(dados: dict[str, pd.DataFrame], hoje: date) -> pd.DataFrame:
-    """SKUs filho parados no CD: qtd_cd>0, ZERO em qualquer loja, pai com
-    dt_envio (já foi lançado) e status em config.STATUS_ALERTA_CD.
+    """SKUs filho parados no CD: qtd_cd>0, ZERO em qualquer loja, nada em
+    trânsito para loja, pai com dt_envio (já foi lançado) e status em
+    config.STATUS_ALERTA_CD.
 
+    Peça em trânsito não está "parada" — filho com qualquer quantidade a
+    caminho de loja fica fora do alerta (evita marcar lançamento em rota).
     Requer a tabela `estoque_amplo` (foto CD x lojas de TODOS os status);
     ausente/None (nuvem ainda não republicada) -> DataFrame vazio.
     """
@@ -474,6 +477,11 @@ def alerta_parado_cd(dados: dict[str, pd.DataFrame], hoje: date) -> pd.DataFrame
     ea[["qtd_cd", "qtd_lojas"]] = ea[["qtd_cd", "qtd_lojas"]].astype(int)
     ea = ea[(ea["qtd_cd"] > 0) & (ea["qtd_lojas"] == 0)
             & (ea["status"].isin(config.STATUS_ALERTA_CD))]
+
+    transito = dados.get("transito")
+    if transito is not None and not transito.empty:
+        em_transito = set(transito.loc[transito["qtd"] > 0, "sku_filho"])
+        ea = ea[~ea["sku_filho"].isin(em_transito)]
     if ea.empty:
         return pd.DataFrame(columns=ALERTA_CD_COLS)
 

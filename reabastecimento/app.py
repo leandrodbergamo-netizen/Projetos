@@ -853,8 +853,8 @@ with tab_alertas:
     st.markdown(f'<div style="font-size:16px;font-weight:600;color:{COR["texto"]};'
                 'margin:10px 0 2px">SKU filho parado no CD</div>',
                 unsafe_allow_html=True)
-    st.caption("SKU filho com estoque no CD, ZERO peças em loja e pai já enviado "
-               "(dt_envio preenchida). Status monitorados: "
+    st.caption("SKU filho com estoque no CD, ZERO peças em loja, nada em trânsito "
+               "para loja e pai já enviado (dt_envio preenchida). Status monitorados: "
                + " · ".join(sorted(config.STATUS_ALERTA_CD)) + ".")
 
     al = _alerta_cd(hoje.isoformat())
