@@ -98,6 +98,68 @@ def _pais_elegiveis_abastecimento(dados: dict[str, pd.DataFrame]) -> set | None:
     return tem_envio & (com_estoque | com_venda)
 
 
+def _pesos_tamanho(dados: dict[str, pd.DataFrame], pares: pd.DataFrame) -> pd.DataFrame:
+    """Peso de cada tamanho dentro do pai, por loja receptora (abastecimento).
+
+    Abre a previsão do PAI por tamanho pela participação de venda (ano
+    corrente), com cascata conforme a amostra disponível: loja×pai ->
+    rede×pai -> loja×subgrupo (perfil de tamanho da loja na categoria) ->
+    rede×subgrupo -> uniforme. Piso de TAMANHO_PISO/n por tamanho
+    (renormalizado) evita zerar um tamanho por amostra esparsa.
+
+    pares: DataFrame com colunas loja e sku_pai.
+    Retorna: loja, sku_pai, sku_filho, peso_tam (soma 1 por loja×pai), base_tam.
+    """
+    produtos = dados["produtos"]
+    attrs = produtos[["sku_filho", "sku_pai", "tamanho", "subgrupo"]].drop_duplicates("sku_filho")
+    grade = attrs[attrs["sku_pai"].isin(set(pares["sku_pai"]))]
+    grade_por_pai = {p: list(zip(g["sku_filho"], g["tamanho"], g["subgrupo"]))
+                     for p, g in grade.groupby("sku_pai")}
+
+    v = dados["vendas"].merge(attrs[["sku_filho", "tamanho", "subgrupo"]],
+                              on="sku_filho", how="left")
+    lp = v.groupby(["loja", "sku_pai", "sku_filho"])["qtd"].sum().to_dict()
+    lp_tot = v.groupby(["loja", "sku_pai"])["qtd"].sum().to_dict()
+    rp = v.groupby(["sku_pai", "sku_filho"])["qtd"].sum().to_dict()
+    rp_tot = v.groupby("sku_pai")["qtd"].sum().to_dict()
+    ls = v.groupby(["loja", "subgrupo", "tamanho"])["qtd"].sum().to_dict()
+    ls_tot = v.groupby(["loja", "subgrupo"])["qtd"].sum().to_dict()
+    rs = v.groupby(["subgrupo", "tamanho"])["qtd"].sum().to_dict()
+    rs_tot = v.groupby("subgrupo")["qtd"].sum().to_dict()
+
+    linhas = []
+    for loja, pai in pares[["loja", "sku_pai"]].drop_duplicates().itertuples(index=False):
+        filhos = grade_por_pai.get(pai, [])
+        n = len(filhos)
+        if n == 0:
+            continue
+        sub = filhos[0][2]
+        if lp_tot.get((loja, pai), 0) >= config.TAMANHO_MIN_PECAS_PAI:
+            base = "loja×pai"
+            shares = {f: float(lp.get((loja, pai, f), 0)) for f, _, _ in filhos}
+        elif rp_tot.get(pai, 0) >= config.TAMANHO_MIN_PECAS_PAI:
+            base = "rede×pai"
+            shares = {f: float(rp.get((pai, f), 0)) for f, _, _ in filhos}
+        elif ls_tot.get((loja, sub), 0) >= config.TAMANHO_MIN_PECAS_SUBGRUPO:
+            base = "loja×subgrupo"
+            shares = {f: float(ls.get((loja, sub, t), 0)) for f, t, _ in filhos}
+        elif rs_tot.get(sub, 0) > 0:
+            base = "rede×subgrupo"
+            shares = {f: float(rs.get((sub, t), 0)) for f, t, _ in filhos}
+        else:
+            base = "uniforme"
+            shares = {f: 1.0 for f, _, _ in filhos}
+        tot = sum(shares.values()) or 1.0
+        piso = config.TAMANHO_PISO / n
+        pesos = {f: max(q / tot, piso) for f, q in shares.items()}
+        soma = sum(pesos.values())
+        for f, _, _ in filhos:
+            linhas.append({"loja": loja, "sku_pai": pai, "sku_filho": f,
+                           "peso_tam": pesos[f] / soma, "base_tam": base})
+    return pd.DataFrame(linhas, columns=["loja", "sku_pai", "sku_filho",
+                                         "peso_tam", "base_tam"])
+
+
 def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
                  janela_dias: int = config.JANELA_VENDAS_DIAS,
                  curva=None, excluir=None, gate_cd: str = "sem",
@@ -200,7 +262,7 @@ def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
     if not exigir_carrega_pai:
         saida_cols = saida_cols + ["introducao"]
     if gate_cd == "com":
-        saida_cols = saida_cols + ["estoque_filho"]
+        saida_cols = saida_cols + ["estoque_filho", "peso_tam", "base_tam"]
     if cand.empty:
         return pd.DataFrame(columns=saida_cols)
 
@@ -215,10 +277,17 @@ def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
     # Score combinado: maior demanda prevista E menor cobertura -> maior prioridade.
     cand["score"] = cand["prev_horizonte"] / (1 + cand["cobertura_pai"].fillna(0))
 
-    # Quantidade: previsão do horizonte rateada por tamanho, limitada pelo grupo.
-    lim = cand["grupo_limite"].map(config.limite_do_grupo).fillna(config.LIMITE_GRUPO_PADRAO)
-    prev_filho = cand["prev_horizonte"] / cand["n_tam"].clip(lower=1).fillna(1)
+    # Quantidade: previsão do horizonte aberta por tamanho, limitada pelo grupo.
     if gate_cd == "com":
+        # Previsão do TAMANHO = previsão do pai × participação de venda do
+        # tamanho (cascata por amostra: loja×pai -> rede×pai -> loja×subgrupo
+        # -> rede×subgrupo -> uniforme) — evita repor o tamanho errado.
+        pesos = _pesos_tamanho(dados, cand[["loja", "sku_pai"]].drop_duplicates())
+        cand = cand.merge(pesos, on=["loja", "sku_pai", "sku_filho"], how="left")
+        cand["peso_tam"] = cand["peso_tam"].fillna(1.0 / cand["n_tam"].clip(lower=1))
+        cand["base_tam"] = cand["base_tam"].fillna("uniforme")
+        lim = cand["grupo_limite"].map(config.limite_do_grupo).fillna(config.LIMITE_GRUPO_PADRAO)
+        prev_filho = cand["prev_horizonte"] * cand["peso_tam"]
         # Premissa (09/2026): distribui quando a projeção zera o tamanho dentro
         # do horizonte — estoque do filho < previsão do filho no horizonte.
         # RUPTURA (estoque zero) entra SEMPRE, mesmo sem previsão: recebe 1
@@ -229,11 +298,14 @@ def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
         if cand.empty:
             return pd.DataFrame(columns=saida_cols)
         cand["estoque_filho"] = cand["qtd"].astype(int)
+        cand["peso_tam"] = cand["peso_tam"].round(3)
         teto = (lim - cand["qtd"]).clip(lower=1)
         cand["qtd_sugerida"] = ((prev_filho - cand["qtd"]).round()
                                 .clip(lower=1).clip(upper=teto)
                                 .fillna(1).astype(int))
     else:
+        lim = cand["grupo_limite"].map(config.limite_do_grupo).fillna(config.LIMITE_GRUPO_PADRAO)
+        prev_filho = cand["prev_horizonte"] / cand["n_tam"].clip(lower=1).fillna(1)
         cand["qtd_sugerida"] = (prev_filho.round()
                                 .clip(lower=1, upper=lim).fillna(1).astype(int))
 

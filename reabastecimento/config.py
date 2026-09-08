@@ -79,6 +79,15 @@ STATUS_ALERTA_CD = {"PERENE", "NOVIDADE", "MIGRADO", "RECOMPRA", "ETIQUETA CINZA
 # descrição (desc_item) — ex.: uniformes de funcionário não são sortimento.
 EXCLUIR_DESCRICAO_TERMOS = ("UNIFORME",)
 
+# --- Ponderação por tamanho (abastecimento CD) ------------------------------
+# A previsão do pai é aberta por tamanho pela participação de venda do ano,
+# com cascata de fallback conforme a amostra: loja×pai -> rede×pai ->
+# loja×subgrupo (perfil de tamanho da loja na categoria) -> rede×subgrupo ->
+# uniforme. Evita repor o tamanho errado (ex.: PP vende 4%, M vende 33%).
+TAMANHO_MIN_PECAS_PAI = 10        # amostra mínima p/ usar a curva do pai
+TAMANHO_MIN_PECAS_SUBGRUPO = 30   # amostra mínima p/ usar perfil loja×subgrupo
+TAMANHO_PISO = 0.5                # piso por tamanho = PISO/n_tam (renormalizado)
+
 # Marcas de loja excluídas como doadora e como receptora (ex.: Outlet Alexânia).
 EXCLUIR_MARCAS_LOJA = {"OUTLET"}
 

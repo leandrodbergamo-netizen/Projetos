@@ -155,7 +155,7 @@ st.markdown(
 # Versão dos dados: entra na chave de TODAS as funções cacheadas. Incrementar
 # quando uma republicação muda os dados de forma incompatível (novas tabelas,
 # exclusões) — força recarga sem depender de Reboot do app na nuvem.
-VERSAO_DADOS = 5
+VERSAO_DADOS = 6
 _chave_dados = f"{hoje.isoformat()}·v{VERSAO_DADOS}"
 
 
@@ -532,9 +532,9 @@ with tab_cd:
             horizonte_cd = st.number_input(
                 "Horizonte de cobertura (semanas)", min_value=1, max_value=12,
                 value=config.COBERTURA_HORIZONTE_SEMANAS,
-                help="Semanas de venda prevista que o envio deve cobrir. Define "
-                     "a quantidade sugerida por tamanho (previsão do horizonte ÷ "
-                     "nº de tamanhos, limitada pelo grupo) e entra no score.")
+                help="Semanas de venda prevista que o envio deve cobrir. A "
+                     "previsão do pai é aberta por tamanho pela participação de "
+                     "venda (loja→rede→categoria) e limitada pelo grupo.")
             _lojas_cd = sorted(dados["estoque_loja"]["loja"].dropna().unique())
             _cfg_nr_cd = {config.norm_loja(x) for x in config.LOJAS_NAO_RECEBEM}
             nao_recebem_cd = st.multiselect(
@@ -639,7 +639,9 @@ with tab_cd:
         st.caption("Entra quem a projeção zera dentro do horizonte de cobertura — "
                    "e ruptura (loja zerada) entra sempre, no fim da fila quando "
                    "não há previsão. "
-                   "Qtd = diferença até a cobertura alvo (estoque atual em 'Na loja'). "
+                   "Qtd = diferença até a cobertura alvo (estoque atual em 'Na loja'); "
+                   "a previsão do tamanho pondera a participação de venda por "
+                   "tamanho (cascata loja→rede→categoria, auditável no Excel). "
                    "Prioridade por score (demanda prevista ÷ cobertura). "
                    "Última venda = última venda do SKU filho na loja receptora "
                    "(ano corrente; \"—\" = loja não vendeu esse tamanho no ano). "
