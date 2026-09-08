@@ -501,6 +501,34 @@ def alerta_parado_cd(dados: dict[str, pd.DataFrame], hoje: date) -> pd.DataFrame
             .reset_index(drop=True))
 
 
+def sell_through_por_sku(dados: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """Base do % Sell Through por sku_filho, com atributos para filtro.
+
+    vendas = acumulado desde 2022 (tabela vendas_hist, anos fechados) + ano
+    corrente; estoque = lojas + CD (foto atual). ST agregado = Σ vendas ÷
+    Σ (vendas + estoque). Sem vendas_hist (nuvem ainda não republicada),
+    usa só o ano corrente.
+    """
+    produtos = dados["produtos"]
+    v = dados["vendas"].groupby("sku_filho")["qtd"].sum()
+    vh = dados.get("vendas_hist")
+    if vh is not None and not vh.empty:
+        v = v.add(vh.groupby("sku_filho")["qtd"].sum(), fill_value=0)
+    el = dados["estoque_loja"].groupby("sku_filho")["qtd"].sum()
+    cd = dados["estoque_cd"].groupby("sku_filho")["qtd"].sum()
+    base = (pd.DataFrame({"vendas": v})
+            .join(el.rename("estoque_lojas"), how="outer")
+            .join(cd.rename("estoque_cd"), how="outer")
+            .fillna(0))
+    base.index.name = "sku_filho"
+    base = base.reset_index()
+    base["estoque"] = base["estoque_lojas"] + base["estoque_cd"]
+    attrs = ["sku_filho", "linha", "grupo", "subgrupo", "colecao", "status"]
+    attrs = [c for c in attrs if c in produtos.columns]
+    return base.merge(produtos[attrs].drop_duplicates("sku_filho"),
+                      on="sku_filho", how="inner")
+
+
 def cobertura_sortimento(dados: dict[str, pd.DataFrame], hoje: date,
                          curva=None) -> pd.DataFrame:
     """Cobertura por (loja, sku_pai) sobre o sortimento carregado.

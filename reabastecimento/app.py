@@ -192,6 +192,11 @@ def _alerta_cd(hoje_iso: str):
     return engine.alerta_parado_cd(_carregar(hoje_iso), config.data_referencia())
 
 
+@st.cache_data(show_spinner=False)
+def _st_base(hoje_iso: str):
+    return engine.sell_through_por_sku(_carregar(hoje_iso))
+
+
 dados = _carregar(hoje.isoformat())
 
 
@@ -332,7 +337,7 @@ ABAST_RENOME = {"loja_receptora": "Loja receptora", "linha": "Linha", "grupo": "
                 "subgrupo": "Subgrupo", "colecao": "Coleção", "status": "Status",
                 "sku_pai": "SKU pai", "sku_filho": "SKU filho", "tamanho": "Tamanho",
                 "qtd": "Qtd", "introducao": "Introdução", "parcial": "Parcial",
-                "score_receptora": "Score"}
+                "ultima_venda": "Última venda", "score_receptora": "Score"}
 ALERTA_RENOME = {"linha": "Linha", "grupo": "Grupo", "subgrupo": "Subgrupo",
                  "colecao": "Coleção", "status": "Status", "sku_pai": "SKU pai",
                  "sku_filho": "SKU filho", "descricao": "Descrição",
@@ -558,29 +563,33 @@ with tab_cd:
 
         exib_a = va.copy()
         exib_a["tamanho"] = _tamanho_de(va)
-        obs = [" · ".join(f for f in (("INTRODUÇÃO" if i == "Sim" else ""),
-                                      ("PARCIAL" if p == "Sim" else "")) if f)
-               for i, p in zip(exib_a["introducao"], exib_a["parcial"])]
+        # Última venda do SKU filho NA loja receptora (base do ano corrente).
+        _ult = dados["vendas"].groupby(["loja", "sku_filho"])["data"].max()
+        exib_a["ultima_venda"] = [
+            _ult.get((l, s), pd.NaT)
+            for l, s in zip(exib_a["loja_receptora"], exib_a["sku_filho"])]
         disp_a = pd.DataFrame({
             "Loja receptora": "→ " + exib_a["loja_receptora"].astype(str),
             "Produto": exib_a["subgrupo"].astype(str).str.title() + " · "
                        + exib_a["colecao"].map(_rotulo_colecao),
             "SKU pai": exib_a["sku_pai"],
             "Tamanho": exib_a["tamanho"],
-            "Qtd": exib_a["qtd"].astype(int),
-            "Obs": obs,
+            "Qtd": [str(int(q)) + (" ⚠" if p == "Sim" else "")
+                    for q, p in zip(exib_a["qtd"], exib_a["parcial"])],
+            "Última venda": exib_a["ultima_venda"],
             "Score": exib_a["score_receptora"].astype(float),
         })
         tabela_a = _tabela_html(
             disp_a, altura=400,
-            fmt={"Score": lambda x: f"{x:.1f}", "Qtd": lambda x: str(int(x))},
+            fmt={"Score": lambda x: f"{x:.1f}",
+                 "Última venda": lambda d: ("—" if pd.isna(d)
+                                            else pd.Timestamp(d).strftime("%d/%m/%Y"))},
             css={
                 "Score": lambda _: f"color:{COR['acento']};font-weight:600;{_DIR}",
-                "Qtd": lambda _: _DIR,
-                "Obs": lambda x: (
-                    (f"color:{COR['alerta']};" if "PARCIAL" in str(x)
-                     else f"color:{COR['acento']};")
-                    + "font-weight:700;font-size:10px;letter-spacing:0.04em") if x else "",
+                "Qtd": lambda x: (f"color:{COR['alerta']};font-weight:600;{_DIR}"
+                                  if "⚠" in str(x) else _DIR),
+                "Última venda": lambda d: (f"color:{COR['alerta']};{_DIR}"
+                                           if pd.isna(d) else _DIR),
                 "SKU pai": lambda _: _MONO,
                 "Tamanho": lambda _: "text-align:center",
             })
@@ -600,8 +609,9 @@ with tab_cd:
 
         st.markdown(tabela_a, unsafe_allow_html=True)
         st.caption("Prioridade por score (demanda prevista ÷ cobertura). "
-                   "INTRODUÇÃO = loja sem nenhum filho do pai (re-clusterização via CD); "
-                   "PARCIAL = estoque do CD não cobre o pedido. "
+                   "Última venda = última venda do SKU filho na loja receptora "
+                   "(ano corrente; \"—\" = loja não vendeu esse tamanho no ano). "
+                   "⚠ na Qtd = envio parcial, estoque do CD não cobre o pedido. "
                    "Limites por SKU filho: Home 10 · Acessórios 4 · Roupa 2.")
 
         with st.expander("Carga por loja receptora"):
@@ -661,12 +671,18 @@ with tab_rup:
         cob_loja = engine.cobertura_agregada(rf, cob, "loja")
         prev_tot = float(cob_loja["prev_sem"].sum()) if not cob_loja.empty else 0.0
         cob_geral = cob_loja["estoque"].sum() / prev_tot if prev_tot > 0 else float("nan")
-        m1, m2, m3, m4 = st.columns(4)
+        stb = _aplica(_st_base(hoje.isoformat()), filtros_r)
+        st_vendas = float(stb["vendas"].sum())
+        st_total = st_vendas + float(stb["estoque"].sum())
+        st_pct = 100.0 * st_vendas / st_total if st_total > 0 else float("nan")
+        m1, m2, m3, m4, m5 = st.columns(5)
         card(m1, "% Ruptura loja", _pct(p_loja), "estoque físico da loja")
         card(m2, "% Ruptura loja + trânsito", _pct(p_trans), "considerando peças a caminho")
         card(m3, "% Sold out CD", _pct(p_cd), "sem reposição disponível no CD")
         card(m4, "Cobertura média", _sem(cob_geral),
              "estoque ÷ venda semanal prevista (full price)")
+        card(m5, "% Sell Through", _pct(st_pct) if pd.notna(st_pct) else "—",
+             "vendas desde 2022 ÷ (vendas + estoque lojas e CD)")
         st.write("")
 
         with st.container(border=True):

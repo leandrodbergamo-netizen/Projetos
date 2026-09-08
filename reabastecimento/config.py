@@ -73,6 +73,10 @@ STATUS_ESTOQUE_PERMITIDOS = {"NOVIDADE", "PERENE", "LIQUIDAÇÃO", "MIGRADO"}
 # Inclui RECOMPRA e ETIQUETA CINZA, que ficam FORA do remanejamento.
 STATUS_ALERTA_CD = {"PERENE", "NOVIDADE", "MIGRADO", "RECOMPRA", "ETIQUETA CINZA"}
 
+# Termos que EXCLUEM o produto de todas as aplicações quando aparecem na
+# descrição (desc_item) — ex.: uniformes de funcionário não são sortimento.
+EXCLUIR_DESCRICAO_TERMOS = ("UNIFORME",)
+
 # Marcas de loja excluídas como doadora e como receptora (ex.: Outlet Alexânia).
 EXCLUIR_MARCAS_LOJA = {"OUTLET"}
 

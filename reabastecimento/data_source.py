@@ -72,6 +72,37 @@ def _pais_venda_hist() -> pd.DataFrame:
     return df
 
 
+def _vendas_hist_filho() -> pd.DataFrame:
+    """Vendas acumuladas por sku_filho nos anos FECHADOS (2022-2025).
+
+    Mesmo esquema de cache permanente do _pais_venda_hist (anos fechados são
+    imutáveis): data/cache/vendas_hist_filho.parquet. Usada no % Sell Through
+    ("todo o período"). Sem as bases locais (nuvem), devolve vazio.
+    """
+    cache = config.PASTA_CACHE / "vendas_hist_filho.parquet"
+    if cache.exists():
+        return pd.read_parquet(cache)
+    partes = []
+    for arq in config.ARQS_VENDAS_FECHADOS:
+        if not arq.exists():
+            continue
+        v = _ler_excel(arq, "Base_Vendas",
+                       usecols=["sk_produto", "qtd_produto", "tipo_venda"])
+        v = v[v["tipo_venda"] == "venda"].dropna(subset=["sk_produto"])
+        v["sku_filho"] = v["sk_produto"].astype("int64").astype(str)
+        v["qtd"] = pd.to_numeric(v["qtd_produto"], errors="coerce").fillna(0)
+        partes.append(v.groupby("sku_filho")["qtd"].sum())
+    if partes:
+        tot = (pd.concat(partes).groupby(level=0).sum().astype(int)
+               .rename("qtd").reset_index())
+    else:
+        tot = pd.DataFrame({"sku_filho": pd.Series(dtype=str),
+                            "qtd": pd.Series(dtype=int)})
+    config.PASTA_CACHE.mkdir(parents=True, exist_ok=True)
+    tot.to_parquet(cache, index=False)
+    return tot
+
+
 # ---------------------------------------------------------------------------
 # Fonte EXCEL (bases reais)
 # ---------------------------------------------------------------------------
@@ -118,6 +149,17 @@ def _build_excel(hoje: date) -> dict[str, pd.DataFrame]:
                   .rename("status").reset_index())
     produtos = produtos.merge(sku_status, on="sku_filho", how="left")
     produtos["status"] = produtos["status"].fillna("—")
+
+    # --- Exclusão global: uniformes não são sortimento -------------------
+    # Vale para TODAS as aplicações (sugestões, abastecimento, ruptura,
+    # alertas, painéis): descrição com termo vetado OU status UNIFORME.
+    termos = "|".join(config.EXCLUIR_DESCRICAO_TERMOS)
+    eh_excluido = (produtos["descricao"].str.upper().str.contains(termos, na=False)
+                   | (produtos["status"] == "UNIFORME"))
+    skus_excluidos = set(produtos.loc[eh_excluido, "sku_filho"])
+    produtos = produtos[~eh_excluido].copy()
+    est = est[(~est["sku_filho"].isin(skus_excluidos))
+              & (est["desc_status_produto"] != "UNIFORME")]
 
     # --- Estoque amplo (TODOS os status, para a aba Alertas) -------------
     # Foto por sku_filho ANTES do corte de status: RECOMPRA/ETIQUETA CINZA
@@ -177,10 +219,15 @@ def _build_excel(hoje: date) -> dict[str, pd.DataFrame]:
         "cupom": ven["cod_transacao"].astype(str),   # p/ cap de outlier na demanda
     })
     vendas = vendas[vendas["qtd"] > 0]
+    vendas = vendas[~vendas["sku_filho"].isin(skus_excluidos)]
 
     # --- Pais com QUALQUER venda histórica (2022 -> hoje) -----------------
     pais_com_venda = pd.DataFrame({"sku_pai": sorted(
         set(_pais_venda_hist()["sku_pai"]) | set(vendas["sku_pai"].unique()))})
+
+    # --- Vendas acumuladas dos anos fechados, por filho (p/ Sell Through) --
+    vendas_hist = _vendas_hist_filho()
+    vendas_hist = vendas_hist[~vendas_hist["sku_filho"].isin(skus_excluidos)]
 
     # --- Recebimento: snapshot (quando maduro) OU dt_envio + leadtime ----
     receb_envio = estoque_loja[["loja", "sku_filho"]].merge(
@@ -209,6 +256,7 @@ def _build_excel(hoje: date) -> dict[str, pd.DataFrame]:
         "skus_permitidos": skus_permitidos,
         "estoque_amplo": estoque_amplo,
         "pais_com_venda": pais_com_venda,
+        "vendas_hist": vendas_hist,
     }
 
 
@@ -338,7 +386,7 @@ TABELAS = ["produtos", "estoque_loja", "estoque_cd", "transito",
            "vendas", "recebimento", "skus_permitidos"]
 # Tabelas novas (podem ainda não existir na nuvem antes da republicação):
 # lidas com tolerância a ausência; consumidores tratam None.
-TABELAS_NOVAS = ["pais_com_venda", "estoque_amplo"]
+TABELAS_NOVAS = ["pais_com_venda", "estoque_amplo", "vendas_hist"]
 
 
 def _segredo(nome: str) -> str:
