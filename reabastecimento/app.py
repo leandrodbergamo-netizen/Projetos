@@ -152,6 +152,13 @@ st.markdown(
 
 
 # --- Dados / resultado (mesma lógica de antes) ------------------------------
+# Versão dos dados: entra na chave de TODAS as funções cacheadas. Incrementar
+# quando uma republicação muda os dados de forma incompatível (novas tabelas,
+# exclusões) — força recarga sem depender de Reboot do app na nuvem.
+VERSAO_DADOS = 2
+_chave_dados = f"{hoje.isoformat()}·v{VERSAO_DADOS}"
+
+
 @st.cache_data(show_spinner="Carregando dados...")
 def _carregar(hoje_iso: str):
     return carregar_dados()
@@ -198,7 +205,7 @@ def _st_base(hoje_iso: str):
     return engine.sell_through_por_sku(_carregar(hoje_iso))
 
 
-dados = _carregar(hoje.isoformat())
+dados = _carregar(_chave_dados)
 
 
 # --- Helpers de exibição ----------------------------------------------------
@@ -404,7 +411,7 @@ with tab_sug:
         chips += f'<span class="chip">Não recebem<b>{len(nao_recebem)}</b></span>'
     c_chips.markdown(f'<div class="chips">{chips}</div>', unsafe_allow_html=True)
 
-    res = _resultado(hoje.isoformat(), semanas_min, max_lojas, janela,
+    res = _resultado(_chave_dados, semanas_min, max_lojas, janela,
                      tuple(nao_doam), tuple(nao_recebem))
     nec, doa, sug, pot = res["necessidades"], res["doadoras"], res["sugestoes"], res["potencial"]
 
@@ -541,7 +548,7 @@ with tab_cd:
         chips_cd += f'<span class="chip">Não recebem<b>{len(nao_recebem_cd)}</b></span>'
     ca_chips.markdown(f'<div class="chips">{chips_cd}</div>', unsafe_allow_html=True)
 
-    ab = _abastecimento(hoje.isoformat(), janela, int(reserva_cd),
+    ab = _abastecimento(_chave_dados, janela, int(reserva_cd),
                         tuple(nao_recebem_cd), int(horizonte_cd))
     nec_cd, abast, sobra_cd = ab["necessidades_cd"], ab["abastecimento"], ab["sobra_cd"]
 
@@ -673,11 +680,11 @@ with tab_rup:
                 'por loja e subgrupo.</div>',
                 unsafe_allow_html=True)
 
-    rs = _rup_skus(hoje.isoformat())
+    rs = _rup_skus(_chave_dados)
     if rs.empty:
         st.info("Sem dados de ruptura.")
     else:
-        cob = _cobertura(hoje.isoformat())
+        cob = _cobertura(_chave_dados)
         filtros_r = _linha_filtros(rs, FILTROS_DIM, "fr")
         rf = _aplica(rs, filtros_r)
 
@@ -688,7 +695,7 @@ with tab_rup:
         cob_loja = engine.cobertura_agregada(rf, cob, "loja")
         prev_tot = float(cob_loja["prev_sem"].sum()) if not cob_loja.empty else 0.0
         cob_geral = cob_loja["estoque"].sum() / prev_tot if prev_tot > 0 else float("nan")
-        stb = _aplica(_st_base(hoje.isoformat()), filtros_r)
+        stb = _aplica(_st_base(_chave_dados), filtros_r)
         st_vendas = float(stb["vendas"].sum())
         st_total = st_vendas + float(stb["estoque"].sum())
         st_pct = 100.0 * st_vendas / st_total if st_total > 0 else float("nan")
@@ -874,7 +881,7 @@ with tab_alertas:
                "para loja e pai já enviado (dt_envio preenchida). Status monitorados: "
                + " · ".join(sorted(config.STATUS_ALERTA_CD)) + ".")
 
-    al = _alerta_cd(hoje.isoformat())
+    al = _alerta_cd(_chave_dados)
     if dados.get("estoque_amplo") is None:
         st.info("Alerta indisponível nesta fonte: a tabela `estoque_amplo` ainda "
                 "não foi publicada na nuvem (rode o publica_supabase / aguarde a "
