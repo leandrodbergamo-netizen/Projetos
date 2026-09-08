@@ -106,8 +106,11 @@ def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
     """Rupturas candidatas a receber peças.
 
     `excluir`: lojas que não recebem (default config.LOJAS_NAO_RECEBEM).
-    `gate_cd`: "sem" = só SKUs que o CD NÃO tem (remanejamento entre lojas);
-               "com" = só SKUs que o CD TEM (abastecimento a partir do CD).
+    `gate_cd`: "sem" = só SKUs que o CD NÃO tem (remanejamento entre lojas),
+               exigindo RUPTURA (estoque zero do filho na loja);
+               "com" = só SKUs que o CD TEM (abastecimento a partir do CD),
+               exigindo COBERTURA abaixo do horizonte (a projeção zera o
+               tamanho dentro de `horizonte_sem`); a qtd é o gap até o alvo.
                No modo "com" exige ainda pai já lançado: dt_envio preenchido
                E (estoque em alguma loja OU venda histórica) — ver
                _pais_elegiveis_abastecimento.
@@ -143,8 +146,15 @@ def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
     cand = cand.merge(estoque_loja, on=["loja", "sku_filho"], how="left")
     cand["qtd"] = cand["qtd"].fillna(0)
 
-    # Ruptura = estoque zero do SKU filho.
-    cand = cand[cand["qtd"] == 0].copy()
+    if gate_cd == "com":
+        # Abastecimento (premissa 09/2026): NÃO exige ruptura — repõe quando a
+        # cobertura do TAMANHO fica abaixo do horizonte (corte adiante, após a
+        # previsão). Aqui só sai quem já está no teto de peças do grupo.
+        lim0 = cand["grupo_limite"].map(config.limite_do_grupo).fillna(config.LIMITE_GRUPO_PADRAO)
+        cand = cand[cand["qtd"] < lim0].copy()
+    else:
+        # Remanejamento entre lojas: ruptura = estoque zero do SKU filho.
+        cand = cand[cand["qtd"] == 0].copy()
 
     # Clusterização x ruptura: a loja precisa JÁ carregar o SKU pai, ou seja,
     # ter estoque de pelo menos um outro SKU filho do mesmo pai. Se nunca
@@ -189,6 +199,8 @@ def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
                   "score", "qtd_sugerida"]
     if not exigir_carrega_pai:
         saida_cols = saida_cols + ["introducao"]
+    if gate_cd == "com":
+        saida_cols = saida_cols + ["estoque_filho"]
     if cand.empty:
         return pd.DataFrame(columns=saida_cols)
 
@@ -205,8 +217,23 @@ def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
 
     # Quantidade: previsão do horizonte rateada por tamanho, limitada pelo grupo.
     lim = cand["grupo_limite"].map(config.limite_do_grupo).fillna(config.LIMITE_GRUPO_PADRAO)
-    por_tam = (cand["prev_horizonte"] / cand["n_tam"].clip(lower=1).fillna(1)).round()
-    cand["qtd_sugerida"] = por_tam.clip(lower=1, upper=lim).fillna(1).astype(int)
+    prev_filho = cand["prev_horizonte"] / cand["n_tam"].clip(lower=1).fillna(1)
+    if gate_cd == "com":
+        # Premissa (09/2026): distribui quando a projeção zera o tamanho dentro
+        # do horizonte — estoque do filho < previsão do filho no horizonte.
+        # Quantidade = GAP até a cobertura alvo, sem passar do teto do grupo.
+        manter = cand["qtd"] < prev_filho
+        cand, lim, prev_filho = cand[manter].copy(), lim[manter], prev_filho[manter]
+        if cand.empty:
+            return pd.DataFrame(columns=saida_cols)
+        cand["estoque_filho"] = cand["qtd"].astype(int)
+        teto = (lim - cand["qtd"]).clip(lower=1)
+        cand["qtd_sugerida"] = ((prev_filho - cand["qtd"]).round()
+                                .clip(lower=1).clip(upper=teto)
+                                .fillna(1).astype(int))
+    else:
+        cand["qtd_sugerida"] = (prev_filho.round()
+                                .clip(lower=1, upper=lim).fillna(1).astype(int))
 
     cand["prev_4sem"] = cand["prev_horizonte"].round(1)
     for c in ("colecao", "status", "linha", "subgrupo"):
@@ -378,13 +405,14 @@ def gerar_abastecimento(nec_cd: pd.DataFrame, estoque_cd: pd.DataFrame,
             "status": need.get("status", ""),
             "sku_pai": need["sku_pai"],
             "sku_filho": sku,
+            "estoque_filho": int(need.get("estoque_filho", 0)),
             "qtd": qtd,
             "introducao": need.get("introducao", ""),
             "parcial": "Sim" if qtd < pedido else "",
             "score_receptora": round(float(need["score"]), 1),
         })
     cols = ["loja_receptora", "linha", "grupo", "subgrupo", "colecao", "status",
-            "sku_pai", "sku_filho", "qtd", "introducao", "parcial",
+            "sku_pai", "sku_filho", "estoque_filho", "qtd", "introducao", "parcial",
             "score_receptora"]
     return pd.DataFrame(linhas, columns=cols)
 

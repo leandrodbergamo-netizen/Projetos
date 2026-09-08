@@ -155,7 +155,7 @@ st.markdown(
 # Versão dos dados: entra na chave de TODAS as funções cacheadas. Incrementar
 # quando uma republicação muda os dados de forma incompatível (novas tabelas,
 # exclusões) — força recarga sem depender de Reboot do app na nuvem.
-VERSAO_DADOS = 3
+VERSAO_DADOS = 4
 _chave_dados = f"{hoje.isoformat()}·v{VERSAO_DADOS}"
 
 
@@ -344,7 +344,8 @@ SUG_RENOME = {"loja_doadora": "Loja doadora", "loja_receptora": "Loja receptora"
 ABAST_RENOME = {"loja_receptora": "Loja receptora", "linha": "Linha", "grupo": "Grupo",
                 "subgrupo": "Subgrupo", "colecao": "Coleção", "status": "Status",
                 "sku_pai": "SKU pai", "sku_filho": "SKU filho", "tamanho": "Tamanho",
-                "qtd": "Qtd", "introducao": "Introdução", "parcial": "Parcial",
+                "estoque_filho": "Estoque loja", "qtd": "Qtd",
+                "introducao": "Introdução", "parcial": "Parcial",
                 "ultima_venda": "Última venda", "score_receptora": "Score"}
 ALERTA_RENOME = {"linha": "Linha", "grupo": "Grupo", "subgrupo": "Subgrupo",
                  "colecao": "Coleção", "status": "Status", "sku_pai": "SKU pai",
@@ -515,7 +516,8 @@ with tab_sug:
 # ---------------------------------------------------------------------------
 with tab_cd:
     st.markdown('<div class="pg-titulo">Abastecimento a partir do CD</div>'
-                '<div class="pg-sub">CD → lojas com ruptura que vendem o SKU pai. '
+                '<div class="pg-sub">CD → lojas que vendem o SKU pai e cuja '
+                'cobertura do tamanho zera dentro do horizonte. '
                 'O remanejamento entre lojas cobre apenas o que o CD não tem.</div>',
                 unsafe_allow_html=True)
 
@@ -555,7 +557,7 @@ with tab_cd:
     a1, a2, a3, a4 = st.columns(4)
     skus_eleg = set(nec_cd["sku_filho"]) if not nec_cd.empty else set()
     card(a1, "SKUs elegíveis no CD", _fmt(len(skus_eleg)),
-         "com estoque no CD e ruptura em loja")
+         "com estoque no CD e cobertura abaixo do alvo em loja")
     pecas_eleg = int(sobra_cd.loc[sobra_cd["sku_filho"].isin(skus_eleg), "qtd"].sum()) \
         if skus_eleg else 0
     card(a2, "Peças no CD (elegíveis)", _fmt(pecas_eleg), "estoque dos SKUs com demanda")
@@ -598,6 +600,7 @@ with tab_cd:
                        + exib_a["colecao"].map(_rotulo_colecao),
             "SKU pai": exib_a["sku_pai"],
             "Tamanho": exib_a["tamanho"],
+            "Na loja": exib_a["estoque_filho"].astype(int),
             "Qtd": [str(int(q)) + (" ⚠" if p == "Sim" else "")
                     for q, p in zip(exib_a["qtd"], exib_a["parcial"])],
             "Última venda": exib_a["ultima_venda"],
@@ -610,6 +613,7 @@ with tab_cd:
                                             else pd.Timestamp(d).strftime("%d/%m/%Y"))},
             css={
                 "Score": lambda _: f"color:{COR['acento']};font-weight:600;{_DIR}",
+                "Na loja": lambda _: _DIR,
                 "Qtd": lambda x: (f"color:{COR['alerta']};font-weight:600;{_DIR}"
                                   if "⚠" in str(x) else _DIR),
                 "Última venda": lambda d: (f"color:{COR['alerta']};{_DIR}"
@@ -632,7 +636,9 @@ with tab_cd:
                                type="primary", key="csv_fa")
 
         st.markdown(tabela_a, unsafe_allow_html=True)
-        st.caption("Prioridade por score (demanda prevista ÷ cobertura). "
+        st.caption("Entra quem a projeção zera dentro do horizonte de cobertura; "
+                   "Qtd = diferença até a cobertura alvo (estoque atual em 'Na loja'). "
+                   "Prioridade por score (demanda prevista ÷ cobertura). "
                    "Última venda = última venda do SKU filho na loja receptora "
                    "(ano corrente; \"—\" = loja não vendeu esse tamanho no ano). "
                    "⚠ na Qtd = envio parcial, estoque do CD não cobre o pedido. "
