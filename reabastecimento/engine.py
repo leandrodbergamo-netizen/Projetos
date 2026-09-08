@@ -221,8 +221,10 @@ def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
     if gate_cd == "com":
         # Premissa (09/2026): distribui quando a projeção zera o tamanho dentro
         # do horizonte — estoque do filho < previsão do filho no horizonte.
+        # RUPTURA (estoque zero) entra SEMPRE, mesmo sem previsão: recebe 1
+        # peça e score baixo, ficando no fim da fila (atendida pela sobra).
         # Quantidade = GAP até a cobertura alvo, sem passar do teto do grupo.
-        manter = cand["qtd"] < prev_filho
+        manter = (cand["qtd"] < prev_filho) | (cand["qtd"] == 0)
         cand, lim, prev_filho = cand[manter].copy(), lim[manter], prev_filho[manter]
         if cand.empty:
             return pd.DataFrame(columns=saida_cols)

@@ -155,7 +155,7 @@ st.markdown(
 # Versão dos dados: entra na chave de TODAS as funções cacheadas. Incrementar
 # quando uma republicação muda os dados de forma incompatível (novas tabelas,
 # exclusões) — força recarga sem depender de Reboot do app na nuvem.
-VERSAO_DADOS = 4
+VERSAO_DADOS = 5
 _chave_dados = f"{hoje.isoformat()}·v{VERSAO_DADOS}"
 
 
@@ -636,7 +636,9 @@ with tab_cd:
                                type="primary", key="csv_fa")
 
         st.markdown(tabela_a, unsafe_allow_html=True)
-        st.caption("Entra quem a projeção zera dentro do horizonte de cobertura; "
+        st.caption("Entra quem a projeção zera dentro do horizonte de cobertura — "
+                   "e ruptura (loja zerada) entra sempre, no fim da fila quando "
+                   "não há previsão. "
                    "Qtd = diferença até a cobertura alvo (estoque atual em 'Na loja'). "
                    "Prioridade por score (demanda prevista ÷ cobertura). "
                    "Última venda = última venda do SKU filho na loja receptora "
