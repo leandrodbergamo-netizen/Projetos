@@ -155,7 +155,7 @@ st.markdown(
 # Versão dos dados: entra na chave de TODAS as funções cacheadas. Incrementar
 # quando uma republicação muda os dados de forma incompatível (novas tabelas,
 # exclusões) — força recarga sem depender de Reboot do app na nuvem.
-VERSAO_DADOS = 7
+VERSAO_DADOS = 8
 _chave_dados = f"{hoje.isoformat()}·v{VERSAO_DADOS}"
 
 
@@ -343,7 +343,8 @@ SUG_RENOME = {"loja_doadora": "Loja doadora", "loja_receptora": "Loja receptora"
               "dias_parado_doadora": "Pai parado (dias)"}
 ABAST_RENOME = {"loja_receptora": "Loja receptora", "linha": "Linha", "grupo": "Grupo",
                 "subgrupo": "Subgrupo", "colecao": "Coleção", "status": "Status",
-                "sku_pai": "SKU pai", "sku_filho": "SKU filho", "tamanho": "Tamanho",
+                "sku_pai": "SKU pai", "sku_filho": "SKU filho",
+                "descricao": "Descrição", "tamanho": "Tamanho",
                 "estoque_filho": "Estoque loja", "qtd": "Qtd",
                 "introducao": "Introdução", "parcial": "Parcial",
                 "ultima_venda": "Última venda", "score_receptora": "Score"}
@@ -596,8 +597,8 @@ with tab_cd:
             for l, s in zip(exib_a["loja_receptora"], exib_a["sku_filho"])]
         disp_a = pd.DataFrame({
             "Loja receptora": "→ " + exib_a["loja_receptora"].astype(str),
-            "Produto": exib_a["subgrupo"].astype(str).str.title() + " · "
-                       + exib_a["colecao"].map(_rotulo_colecao),
+            "Descrição": exib_a["descricao"].astype(str).str.title(),
+            "Coleção": exib_a["colecao"].map(_rotulo_colecao),
             "SKU pai": exib_a["sku_pai"],
             "Tamanho": exib_a["tamanho"],
             "Na loja": exib_a["estoque_filho"].astype(int),

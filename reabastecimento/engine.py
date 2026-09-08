@@ -508,6 +508,7 @@ def gerar_abastecimento(nec_cd: pd.DataFrame, estoque_cd: pd.DataFrame,
             "status": need.get("status", ""),
             "sku_pai": need["sku_pai"],
             "sku_filho": sku,
+            "descricao": need.get("descricao", ""),
             "estoque_filho": int(need.get("estoque_filho", 0)),
             "qtd": qtd,
             "introducao": need.get("introducao", ""),
@@ -515,8 +516,8 @@ def gerar_abastecimento(nec_cd: pd.DataFrame, estoque_cd: pd.DataFrame,
             "score_receptora": round(float(need["score"]), 1),
         })
     cols = ["loja_receptora", "linha", "grupo", "subgrupo", "colecao", "status",
-            "sku_pai", "sku_filho", "estoque_filho", "qtd", "introducao", "parcial",
-            "score_receptora"]
+            "sku_pai", "sku_filho", "descricao", "estoque_filho", "qtd",
+            "introducao", "parcial", "score_receptora"]
     return pd.DataFrame(linhas, columns=cols)
 
 
