@@ -66,8 +66,10 @@ MAPA_LINHA_GRUPO = {
 }
 
 # Status de estoque (desc_status_produto, Base_Estoque) que PODEM ser remanejados.
-# OUTLET e demais (CANCELADO, RECOMPRA, etc.) ficam de fora.
-STATUS_ESTOQUE_PERMITIDOS = {"NOVIDADE", "PERENE", "LIQUIDAÇÃO", "MIGRADO"}
+# OUTLET e demais (CANCELADO, BRINDE, UNIFORME) ficam de fora.
+# RECOMPRA e ETIQUETA CINZA incluídos em 08/09/2026 a pedido do negócio.
+STATUS_ESTOQUE_PERMITIDOS = {"NOVIDADE", "PERENE", "LIQUIDAÇÃO", "MIGRADO",
+                             "RECOMPRA", "ETIQUETA CINZA"}
 
 # Status monitorados no alerta "SKU filho parado no CD" (aba Alertas).
 # Inclui RECOMPRA e ETIQUETA CINZA, que ficam FORA do remanejamento.
