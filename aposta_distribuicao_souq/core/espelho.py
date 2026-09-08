@@ -3,7 +3,7 @@
 Fluxo:
 1. `preparar_produtos` enriquece o cadastro (tecido/cor/faixa).
 2. `candidatos_espelho` lista produtos comparáveis (match sem data; hard =
-   subgrupo+faixa+tecido+grade; soft relaxável = cor).
+   subgrupo+faixas+tecido; soft relaxável = cor).
 3. `velocidade_por_loja_desaz` mede a velocidade do espelho **nas mesmas lojas**
    e desazonaliza pela janela em que ele vendeu.
 4. `projetar_aposta` extrapola a velocidade por-loja para o parque-alvo, re-
@@ -97,25 +97,24 @@ def candidatos_espelho(
     *,
     subgrupo: str,
     grupo: Optional[str] = None,
-    faixa: Optional[str] = None,
+    faixas=None,
     tecido: Optional[str] = None,
     cor_grupo=None,
-    grade=None,
     desde_colecao: float = 2022.0,
     relaxar: bool = True,
     min_candidatos: int = 5,
 ) -> tuple[pd.DataFrame, list[str]]:
     """Retorna (candidatos, filtros_soft_aplicados).
 
-    Hard: subgrupo + faixa + tecido + grade + coleção >= desde. Coleção fora do
+    Hard: subgrupo + faixas + tecido + coleção >= desde. Coleção fora do
     escopo (PERENE/ALTO VERÃO/CANCELADO) tem rank NaN e cai fora sozinha.
     - `grupo` (construção) é opcional: o tecido já separa Tricot/Jeans/planos,
       então a aba de aposta não pergunta mais a construção ao usuário.
-    - `grade`: buckets de tamanho da aposta (ex.: {"38|PP",...,"46|GG"}). É
-      FILTRO fixo: o espelho precisa ter vendido TODOS os tamanhos da grade
-      (grade dele ⊇ alvo) — senão a curva dele não informa os tamanhos que
-      faltam. Como a grade numerária é unificada (36–46 ≡ XPP–GG), os dois
-      formatos casam.
+    - `faixas`: uma faixa ("P1") ou várias (["P1","P4"]); vazio/None = todas.
+      Cada produto carrega `faixa` calculada na régua da PRÓPRIA construção
+      (P4 de malha ≠ P4 de tecido plano em R$) — o rótulo é o posicionamento.
+    A grade de tamanhos NÃO filtra espelhos: é insumo da distribuição (colunas
+    da matriz e curva de tamanhos).
     Soft (afrouxado se faltar candidato): só a cor.
     - `cor_grupo`: uma cor ou lista (vazio/None = todas).
     Manga/comprimento/fit NÃO filtram — vão na tabela como consulta.
@@ -126,15 +125,12 @@ def candidatos_espelho(
     if grupo is not None:
         hard &= df["desc_grupo_wgb"] == grupo
     hard &= df["rank_colecao"] >= desde_colecao
-    if faixa is not None:
-        hard &= df["faixa"] == faixa
+    alvo_faixas = [faixas] if isinstance(faixas, str) else list(faixas or [])
+    if alvo_faixas:
+        hard &= df["faixa"].isin(alvo_faixas)
     if tecido is not None:
         hard &= df["grupo_material"] == tecido
     base = df[hard]
-    if grade and "tamanho_grupo" in base.columns:
-        alvo = set(grade)
-        grades = grades_por_modelo(base)
-        base = base[base["cod_sku_pai"].map(lambda s: alvo <= grades.get(s, set()))]
 
     if isinstance(cor_grupo, str):
         cor_grupo = [cor_grupo]
@@ -175,23 +171,117 @@ def pool_suavizacao(
     produtos_prep: pd.DataFrame,
     *,
     subgrupo: str,
-    tecido: str,
+    tecido: Optional[str] = None,
     fits=None,
     desde_colecao: float = 2022.0,
 ) -> set:
-    """Modelos do mesmo subgrupo + tecido (+ fit) para suavizar a curva de lojas.
+    """Modelos do mesmo subgrupo (+ tecido, + fit) para suavizar curvas.
 
     A participação por loja calculada só com os espelhos escolhidos é ruidosa
-    (poucos modelos); a do segmento inteiro é estável. `fits` restringe aos fits
-    dos espelhos (None = todos). A aposta e a curva de tamanhos seguem vindo só
-    dos espelhos — o pool alimenta apenas o rateio entre lojas.
+    (poucos modelos); a do segmento inteiro é estável. `tecido`/`fits` None =
+    todos (afrouxam o segmento). A aposta segue vindo só dos espelhos — o pool
+    alimenta o rateio entre lojas e a projeção de tamanhos faltantes.
     """
     df = produtos_prep
-    m = (df["desc_sub_grupo_wbg"] == subgrupo) & (df["grupo_material"] == tecido)
+    m = df["desc_sub_grupo_wbg"] == subgrupo
+    if tecido is not None:
+        m &= df["grupo_material"] == tecido
     m &= df["rank_colecao"] >= desde_colecao
     if fits and "desc_fit" in df.columns:
         m &= df["desc_fit"].isin(list(fits))
     return set(df.loc[m, "cod_sku_pai"])
+
+
+def curva_tamanhos_grade(
+    vendas_fp: pd.DataFrame,
+    produtos_prep: pd.DataFrame,
+    skus_espelhos,
+    grade,
+    *,
+    subgrupo: str,
+    tecido: Optional[str] = None,
+    fits=None,
+    desde_colecao: float = 2022.0,
+    col_tamanho: str = "tamanho_grupo",
+) -> tuple[dict[str, float], dict[str, str], list[str]]:
+    """Curva de tamanhos dos espelhos reconciliada com a grade da aposta.
+
+    (a) Tamanho vendido pelos espelhos FORA da grade é cortado; a massa dele se
+        redistribui na normalização do rateio (comportamento vigente).
+    (b) Tamanho da grade SEM venda nos espelhos é projetado pelo segmento, do
+        pool mais específico ao mais frouxo: subgrupo+tecido+fit →
+        subgrupo+tecido → subgrupo. A calibração usa os tamanhos em comum —
+        `escala = Σ curva[comuns] / Σ pool[comuns]` — para enxertar a proporção
+        do pool na massa dos espelhos. Sem pool com o tamanho: piso = menor
+        peso presente ÷ 2 (nunca zera um tamanho pedido).
+    Espelhos sem venda em nenhum tamanho da grade → a curva do primeiro pool
+    que cobrir entra direto (escala 1).
+    Retorna (curva na ordem da grade, origem por tamanho, avisos). Origens:
+    "espelhos" | "pool_fit" | "pool_tecido" | "pool_subgrupo" | "piso".
+    """
+    from core.dados import curva_tamanhos
+
+    grade = list(grade or [])
+    skus = set(skus_espelhos)
+    bruta = curva_tamanhos(vendas_fp[vendas_fp["cod_sku_pai"].isin(skus)],
+                           produtos_prep, col_tamanho=col_tamanho)
+    if not grade:
+        return bruta, {t: "espelhos" for t in bruta}, []
+
+    curva = {t: bruta[t] for t in grade if bruta.get(t, 0) > 0}
+    origem = {t: "espelhos" for t in curva}
+    faltantes = [t for t in grade if t not in curva]
+
+    niveis = []
+    if fits:
+        niveis.append(("pool_fit", {"tecido": tecido, "fits": fits}))
+    if tecido is not None:
+        niveis.append(("pool_tecido", {"tecido": tecido}))
+    niveis.append(("pool_subgrupo", {}))
+
+    for nome, kw in niveis:
+        if not faltantes:
+            break
+        pool = pool_suavizacao(produtos_prep, subgrupo=subgrupo,
+                               desde_colecao=desde_colecao, **kw)
+        cpool = curva_tamanhos(vendas_fp[vendas_fp["cod_sku_pai"].isin(pool)],
+                               produtos_prep, col_tamanho=col_tamanho)
+        cpool = {t: p for t, p in cpool.items() if t in set(grade) and p > 0}
+        if not cpool:
+            continue
+        comuns = [t for t in curva if t in cpool]
+        if curva and not comuns:
+            continue   # sem interseção não há como calibrar este nível
+        escala = (sum(curva[t] for t in comuns) / sum(cpool[t] for t in comuns)) \
+            if comuns else 1.0
+        for t in [t for t in faltantes if t in cpool]:
+            curva[t] = cpool[t] * escala
+            origem[t] = nome
+        faltantes = [t for t in faltantes if t not in curva]
+
+    if faltantes:
+        piso = min(curva.values()) / 2 if curva else 1.0
+        for t in faltantes:
+            curva[t] = piso
+            origem[t] = "piso"
+
+    curva = {t: curva[t] for t in grade}
+    origem = {t: origem[t] for t in grade}
+
+    avisos = []
+    rotulos = {"pool_fit": "do segmento subgrupo+tecido+fit",
+               "pool_tecido": "do segmento subgrupo+tecido",
+               "pool_subgrupo": "do segmento do subgrupo"}
+    for nome, rotulo in rotulos.items():
+        tams = [t for t in grade if origem[t] == nome]
+        if tams:
+            avisos.append(f"Tamanho(s) {', '.join(tams)} sem venda nos espelhos: "
+                          f"projetado(s) {rotulo}.")
+    tams_piso = [t for t in grade if origem[t] == "piso"]
+    if tams_piso:
+        avisos.append(f"Tamanho(s) {', '.join(tams_piso)} sem histórico no segmento: "
+                      "piso estatístico (menor peso ÷ 2).")
+    return curva, origem, avisos
 
 
 def janelas_full_price(produtos_prep: pd.DataFrame) -> dict:

@@ -134,3 +134,39 @@ class TestAgruparCor:
 
     def test_cor_vazia(self):
         assert agrupar_cor(None) == "Indefinido"
+
+
+class TestFaixasDoSubgrupo:
+    @pytest.fixture()
+    def pasta_faixas(self, tmp_path):
+        import pandas as pd
+
+        from core.taxonomia import _tabela_faixas
+        df = pd.DataFrame({
+            "Grupo": ["MALHA"] * 4 + ["TECIDO PLANO"] * 4,
+            "Subgrupo": ["REGATA"] * 8,
+            "Faixa de Preço": ["P1", "P2", "P3", "P4"] * 2,
+            "MOQ": [50] * 8,
+            "De": [148, 178, 198, 298, 298, 398, 498, 598],
+            "Até": [177.99, 197.99, 297.99, 397.99,
+                    397.99, 497.99, 597.99, 697.99],
+        })
+        df.to_excel(tmp_path / "Faixas de Preco TESTE.xlsx", index=False)
+        _tabela_faixas.cache_clear()
+        yield str(tmp_path)
+        _tabela_faixas.cache_clear()
+
+    def test_reguas_por_construcao(self, pasta_faixas):
+        from core.taxonomia import faixas_do_subgrupo
+        r = faixas_do_subgrupo("REGATA", caminho=pasta_faixas)
+        assert sorted(r["grupo"].unique()) == ["MALHA", "TECIDO PLANO"]
+        assert len(r) == 8
+        # cenário "Regata Berna": o mesmo intervalo em R$ tem rótulos diferentes
+        malha_p4 = r[(r["grupo"] == "MALHA") & (r["faixa"] == "P4")].iloc[0]
+        plano_p1 = r[(r["grupo"] == "TECIDO PLANO") & (r["faixa"] == "P1")].iloc[0]
+        assert (malha_p4["de"], malha_p4["ate"]) == (plano_p1["de"], plano_p1["ate"]) \
+            == (298.0, 397.99)
+
+    def test_subgrupo_inexistente_retorna_vazio(self, pasta_faixas):
+        from core.taxonomia import faixas_do_subgrupo
+        assert faixas_do_subgrupo("VESTIDO", caminho=pasta_faixas).empty

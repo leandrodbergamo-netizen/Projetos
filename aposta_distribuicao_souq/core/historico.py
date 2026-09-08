@@ -94,6 +94,45 @@ def _excluir_db(id_: str) -> None:
         eng.dispose()
 
 
+def _obter_db(id_: str) -> Optional[dict]:
+    from sqlalchemy import text
+
+    eng = fonte.engine()
+    try:
+        with eng.connect() as con:
+            existe = con.execute(text(
+                "select 1 from information_schema.tables "
+                "where table_schema='public' and table_name=:t"), {"t": TABELA}).scalar()
+            if not existe:
+                return None
+            row = con.execute(
+                text(f'select id, criado_em, resumo, payload from public."{TABELA}" '
+                     "where id = :i"), {"i": id_}).mappings().first()
+    finally:
+        eng.dispose()
+    if row is None:
+        return None
+    p = row["payload"]
+    return {"id": row["id"], "criado_em": row["criado_em"], "resumo": row["resumo"],
+            "payload": p if isinstance(p, dict) else json.loads(p)}
+
+
+def _atualizar_db(id_: str, payload: dict, resumo: Optional[str]) -> None:
+    from sqlalchemy import text
+
+    eng = fonte.engine()
+    try:
+        with eng.begin() as con:
+            r = con.execute(
+                text(f'update public."{TABELA}" set payload = cast(:p as jsonb), '
+                     "resumo = coalesce(:r, resumo) where id = :i"),
+                {"i": id_, "p": _json_seguro(payload), "r": resumo})
+            if r.rowcount == 0:
+                raise KeyError(f"Registro {id_!r} não existe no histórico.")
+    finally:
+        eng.dispose()
+
+
 # --------------------------------------------------------------------------- #
 # Backend arquivo local (fallback sem banco)
 # --------------------------------------------------------------------------- #
@@ -135,9 +174,52 @@ def _excluir_arq(id_: str, caminho: Path) -> None:
             fh.write(_json_seguro(l) + "\n")
 
 
+def _obter_arq(id_: str, caminho: Path) -> Optional[dict]:
+    for linha in _ler_arq(caminho):
+        if linha.get("id") == id_:
+            return linha
+    return None
+
+
+def _atualizar_arq(id_: str, payload: dict, resumo: Optional[str], caminho: Path) -> None:
+    linhas, achou = _ler_arq(caminho), False
+    for l in linhas:
+        if l.get("id") == id_:
+            l["payload"] = payload
+            if resumo is not None:
+                l["resumo"] = resumo
+            achou = True
+    if not achou:
+        raise KeyError(f"Registro {id_!r} não existe no histórico.")
+    with caminho.open("w", encoding="utf-8") as fh:
+        for l in linhas:
+            fh.write(_json_seguro(l) + "\n")
+
+
 # --------------------------------------------------------------------------- #
 # API pública
 # --------------------------------------------------------------------------- #
+def normalizar_payload(p: dict) -> dict:
+    """Leitura tolerante de payloads antigos (v1) — nunca regrava o registro.
+
+    v1 tinha faixa única derivada do preço e não conhecia parque nem aposta
+    final: `inputs.faixas` ausente vira `[inputs.faixa]`; `parque` ausente =
+    todas as lojas; `aposta_final` ausente = `aposta_total`. `preco` (v1) fica
+    onde existir, só para exibição.
+    """
+    p = dict(p or {})
+    ins = dict(p.get("inputs") or {})
+    if not ins.get("faixas"):
+        ins["faixas"] = [ins["faixa"]] if ins.get("faixa") else []
+    p["inputs"] = ins
+    if not p.get("parque"):
+        p["parque"] = {"perfis": None, "climas": None, "n_lojas_alvo": None}
+    if p.get("aposta_final") is None:
+        p["aposta_final"] = p.get("aposta_total")
+    p.setdefault("curva_origem", {})
+    return p
+
+
 def salvar(resumo: str, payload: dict, caminho_local: Optional[Path] = None) -> str:
     """Grava um cenário e retorna o id.
 
@@ -157,6 +239,26 @@ def listar(limite: int = 200, caminho_local: Optional[Path] = None) -> pd.DataFr
     if fonte.db_url():
         return _listar_db(limite)
     return _listar_arq(limite, caminho_local or _ARQ_LOCAL)
+
+
+def obter(id_: str, caminho_local: Optional[Path] = None) -> Optional[dict]:
+    """Um registro {'id', 'criado_em', 'resumo', 'payload'} — ou None."""
+    if fonte.db_url():
+        return _obter_db(id_)
+    return _obter_arq(id_, caminho_local or _ARQ_LOCAL)
+
+
+def atualizar(id_: str, payload: dict, resumo: Optional[str] = None,
+              caminho_local: Optional[Path] = None) -> None:
+    """Substitui o payload (e opcionalmente o resumo) de um registro existente.
+
+    `criado_em` é preservado — a distribuição atualiza o MESMO cenário em vez
+    de criar um segundo registro. KeyError se o id não existe.
+    """
+    if fonte.db_url():
+        _atualizar_db(id_, payload, resumo)
+    else:
+        _atualizar_arq(id_, payload, resumo, caminho_local or _ARQ_LOCAL)
 
 
 def excluir(id_: str, caminho_local: Optional[Path] = None) -> None:

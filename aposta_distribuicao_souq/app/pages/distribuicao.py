@@ -1,45 +1,31 @@
-"""Distribuição — seção embutida na aba Nova Aposta (matriz loja × tamanho).
+"""Distribuição — matriz loja × tamanho de um cenário salvo no Histórico.
 
-Usa a aposta/participações/velocidades da projeção atual. O parque-alvo pode ser
-restringido por Perfil Econômico e Clima; loja nova usa a loja espelho do
-`config/lojas_espelho.yaml` (ex.: Casa Jardins = 75% do Iguatemi SP) e, sem
-regra, herda a média do cluster Perfil+Clima. Ecom entra na aposta, mas não é
-destino físico. O resultado fica na tela até a próxima projeção.
+Renderizada pela aba Histórico (botão Distribuir); recebe o payload da projeção
+e o id do registro, e o "Salvar" ATUALIZA esse mesmo registro. Loja nova usa a
+loja espelho do `config/lojas_espelho.yaml` (ex.: Casa Jardins = 75% do
+Iguatemi SP) e, sem regra, herda a média do cluster Perfil+Clima. Ecom entra na
+aposta, mas não é destino físico.
 """
+from datetime import datetime, timezone
+
 import pandas as pd
 import streamlit as st
 
 from app import estilo
 from core.config_utils import load_config
 from core.dados import (cluster_por_loja, espelhos_loja_nova, lojas_alvo_souq,
-                        lojas_souq, opcoes_perfil_clima)
-from core.regra_distribuicao import (arredondar_maior_resto, distribuir,
-                                     normalizar_curva, participacao_com_loja_nova)
-
-TODOS = "TODOS"
-CD_ROTULO = "CD (reserva / reposição)"
+                        lojas_souq)
+from core.regra_distribuicao import (CD_ROTULO, cd_por_tamanho, distribuir,
+                                     participacao_com_loja_nova)
 
 
 def _cd_por_tamanho(aposta_final: float, lojas_matriz: pd.DataFrame, curva: dict) -> dict:
-    """Abre o saldo do CD por tamanho: alvo da compra (curva × aposta final)
-    menos o distribuído nas lojas, preservando o total."""
-    curva_n = normalizar_curva({t: p for t, p in (curva or {}).items() if p > 0})
-    if not curva_n:
-        return {}
-    alvo = arredondar_maior_resto({t: aposta_final * p for t, p in curva_n.items()},
-                                  int(round(aposta_final)))
-    nas_lojas = lojas_matriz.sum(axis=0)
-    cd = {t: int(alvo.get(t, 0)) - int(nas_lojas.get(t, 0)) for t in alvo}
-    deficit = -sum(v for v in cd.values() if v < 0)
-    cd = {t: max(v, 0) for t, v in cd.items()}
-    while deficit > 0 and any(v > 0 for v in cd.values()):
-        t_max = max(cd, key=cd.get)
-        cd[t_max] -= 1
-        deficit -= 1
-    return cd
+    """Linha do CD para a matriz exibida (regra pura em core/regra_distribuicao)."""
+    return cd_por_tamanho(aposta_final, lojas_matriz.sum(axis=0).to_dict(), curva)
 
 
-def _mostra_resultado(resultado, lojas_df, proj, aposta_total=None, chave_editor="0"):
+def _mostra_resultado(resultado, lojas_df, proj, registro_id=None,
+                      aposta_total=None, chave_editor="0"):
     acrescimo = getattr(resultado, "acrescimo_garantia", 0)
     m1, m2, m3, m4 = st.columns(4)
     aposta_final = (aposta_total or 0) + acrescimo
@@ -125,7 +111,6 @@ def _mostra_resultado(resultado, lojas_df, proj, aposta_total=None, chave_editor
     if tot_lojas + tot_cd != int(round(aposta_final)):
         st.warning(f"As lojas ({tot_lojas} un) excedem a aposta final "
                    f"({aposta_final:.0f} un) — o CD zerou. Reduza lojas ou aumente a aposta.")
-    st.session_state["ultima_distribuicao"] = completa
 
     b1, b2, _ = st.columns([1.8, 1.8, 2])
     if b1.button("↺ Recarregar sugestão do modelo"):
@@ -142,56 +127,63 @@ def _mostra_resultado(resultado, lojas_df, proj, aposta_total=None, chave_editor
             # grade completa para exportação: lojas + linha do CD
             matriz_dict = {str(i): {str(c): int(v) for c, v in linha.items()}
                            for i, linha in completa.iterrows()}
-            with st.spinner("Salvando no Histórico…"):
-                historico.salvar(proj["resumo"] + " · distribuição", {
-                    **proj,
+            d_atual = st.session_state.get("distribuicao") or {}
+            novo = {**proj,
                     "distribuicao_editada": matriz_dict,
                     "aposta_final": float(aposta_final),
                     "distribuido_editado": tot_lojas,
-                })
+                    "max_por_tamanho_loja": d_atual.get("max_por_tamanho_loja"),
+                    "garantir_grade_completa": d_atual.get("garantir_grade_completa"),
+                    "atualizado_em": datetime.now(timezone.utc).isoformat()}
+            with st.spinner("Salvando no Histórico…"):
+                # a distribuição ATUALIZA o registro do cenário — um cenário,
+                # um registro (sem o antigo duplicado " · distribuição")
+                if registro_id:
+                    historico.atualizar(registro_id, novo)
+                else:
+                    historico.salvar(proj["resumo"], novo)
             salvou = True
         except Exception:
             salvou = False
         if salvou:
-            # ciclo encerrado: zera 100% dos campos para a próxima aposta
-            # (a decisão de limpar só AQUI é do negócio — antes de salvar, tudo
-            # fica editável para ajustes)
-            for k in ("projecao", "distribuicao", "sel_todos_esp"):
-                st.session_state.pop(k, None)
-            st.session_state["formulario"] = {}
-            st.session_state["espelhos_marcados"] = []
-            st.session_state["etapa"] = 1
-            st.session_state["flash_ciclo"] = ("Distribuição salva no Histórico ✓ — "
-                                               "campos limpos para a próxima aposta.")
+            st.session_state.pop("distribuicao", None)
+            st.session_state.pop("registro_dist_id", None)
+            st.session_state["flash_dist"] = ("Distribuição salva ✓ — registro "
+                                              "atualizado no Histórico.")
         else:
             st.session_state["flash_matriz"] = "Não foi possível salvar no Histórico."
         st.rerun()
 
 
-def secao(proj: dict) -> None:
-    """Renderiza a seção de distribuição para a projeção atual."""
+def secao(proj: dict, registro_id: str | None = None) -> None:
+    """Renderiza a seção de distribuição para um cenário (payload + id do registro)."""
     st.subheader("Distribuição")
+    if st.session_state.get("flash_dist"):
+        st.success(st.session_state.pop("flash_dist"))
     st.caption("Participação por loja (loja nova usa a loja espelho ou o cluster "
                "Perfil+Clima) · reposição garantida pela reserva do CD · teto por "
                "SKU-tamanho. Ecom entra na aposta, não na matriz física.")
 
     cfg = load_config()
 
-    # ----------------------------------------------- parque-alvo (Perfil/Clima)
-    disp = opcoes_perfil_clima()
-    c1, c2, c3 = st.columns(3)
-    perfis = c1.multiselect("Perfil Econômico", [TODOS] + disp["perfis"], default=[TODOS])
-    climas = c2.multiselect("Clima", [TODOS] + disp["climas"], default=[TODOS])
-    max_tam = int(c3.number_input(
-        "Máx. peças por SKU-tamanho/loja", 1, 50, int(cfg.get("max_por_tamanho_loja", 4)),
+    # -------- parque-alvo: decidido na PROJEÇÃO (redutores Perfil/Clima) e
+    # herdado aqui pelo payload; registro antigo (v1) = todas as lojas ativas
+    parque = proj.get("parque") or {}
+    perfis, climas = parque.get("perfis"), parque.get("climas")
+    c1, c2 = st.columns([3.2, 1.4])
+    rot_p = ", ".join(perfis) if perfis else "todos"
+    rot_c = ", ".join(climas) if climas else "todos"
+    c1.markdown(f"**Parque desta aposta:** Perfil {rot_p} · Clima {rot_c}")
+    if not proj.get("parque", {}).get("n_lojas_alvo") and not perfis and not climas:
+        c1.caption("Registro sem parque salvo (formato antigo): todas as lojas ativas.")
+    max_tam = int(c2.number_input(
+        "Máx. peças por SKU-tamanho/loja", 1, 50,
+        int(proj.get("max_por_tamanho_loja") or cfg.get("max_por_tamanho_loja", 4)),
         help="Teto por célula da matriz loja × tamanho. O excedente volta ao CD."))
-    # "TODOS" (ou seleção vazia) = sem restrição
-    perfis = None if (TODOS in perfis or not perfis) else perfis
-    climas = None if (TODOS in climas or not climas) else climas
 
     lojas_df = lojas_alvo_souq(perfis=perfis, climas=climas)
     if lojas_df.empty:
-        st.warning("Nenhuma loja ativa com esse Perfil/Clima.")
+        st.warning("Nenhuma loja ativa com o Perfil/Clima salvo neste cenário.")
         return
 
     lojas_alvo = [str(float(x)) for x in lojas_df["sk_localidade"]]
@@ -238,7 +230,7 @@ def secao(proj: dict) -> None:
     # usa o valor editado (ex.: modelo 90, comercial aposta 120)
     aposta_usada = float(m1.number_input(
         "Aposta a distribuir (un)", 0, None, int(round(sugerida)), 5,
-        key=f"aposta_edit_{proj['resumo']}",
+        key=f"aposta_edit_{registro_id or proj['resumo']}",
         help="Editável — o modelo sugere, o comercial decide. A distribuição usa este valor."))
     if round(aposta_usada) != round(sugerida):
         m1.caption(f"Modelo sugeriu **{sugerida:.0f} un**.")
@@ -267,13 +259,16 @@ def secao(proj: dict) -> None:
             )
         rodada = int(st.session_state.get("_dist_rodada", 0)) + 1
         st.session_state["_dist_rodada"] = rodada
-        st.session_state["distribuicao"] = {"resumo": proj["resumo"], "resultado": resultado,
-                                            "aposta_usada": aposta_usada, "rodada": rodada}
+        st.session_state["distribuicao"] = {
+            "registro_id": registro_id, "resumo": proj["resumo"],
+            "resultado": resultado, "aposta_usada": aposta_usada, "rodada": rodada,
+            "max_por_tamanho_loja": max_tam, "garantir_grade_completa": garantir,
+        }
 
-    # resultado persiste na tela (some se a projeção mudar); a chave do editor
+    # resultado persiste na tela (some se o cenário mudar); a chave do editor
     # muda a cada Distribuir para as edições de célula não vazarem entre rodadas
     d = st.session_state.get("distribuicao")
-    if d and d.get("resumo") == proj["resumo"]:
-        _mostra_resultado(d["resultado"], lojas_df, proj,
+    if d and d.get("registro_id") == registro_id and d.get("resumo") == proj["resumo"]:
+        _mostra_resultado(d["resultado"], lojas_df, proj, registro_id=registro_id,
                           aposta_total=d.get("aposta_usada", proj["aposta_total"]),
                           chave_editor=str(d.get("rodada", 0)))

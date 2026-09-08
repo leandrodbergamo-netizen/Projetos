@@ -1,9 +1,10 @@
-"""Nova aposta — fluxo único em 4 etapas (redesign Souq).
+"""Nova aposta — fluxo único em 3 etapas (redesign Souq).
 
-Produto → Espelhos → Projeção → Distribuição, com stepper no topo. As etapas 3-4
-só destravam depois de projetar; voltar não perde nada (formulário, seleção de
-espelhos e projeção ficam no session_state). O motor de cálculo é o mesmo de
-sempre (core/espelho, core/regra_distribuicao); aqui só muda a apresentação.
+Produto → Espelhos → Projeção, com stepper no topo. A etapa 3 só destrava
+depois de projetar; voltar não perde nada (formulário, seleção de espelhos e
+projeção ficam no session_state). Na Projeção, Perfil/Clima dimensionam a
+aposta pelo parque escolhido e "Salvar aposta" grava UM registro no Histórico
+e encerra o ciclo — a DISTRIBUIÇÃO parte da aba Histórico.
 """
 from datetime import date
 
@@ -13,17 +14,18 @@ import streamlit as st
 from app import estilo
 from app.dados_app import (contexto_lojas, opcoes, opcoes_por_relevancia,
                            produtos_prep, totais_por_sku, vendas_fp)
-from app.pages import distribuicao
 from core.config_utils import load_config
-from core.dados import (colecoes_projetaveis, curva_tamanhos, fim_periodo_saudavel,
-                        participacao_lojas, semanas_ate)
-from core.espelho import (candidatos_espelho, enriquecer_velocidade, grades_por_modelo,
+from core.dados import (colecoes_projetaveis, fim_periodo_saudavel, lojas_alvo_souq,
+                        opcoes_perfil_clima, participacao_lojas, semanas_ate)
+from core.espelho import (candidatos_espelho, curva_tamanhos_grade,
+                          enriquecer_velocidade, grades_por_modelo,
                           janelas_full_price, pool_suavizacao, projetar_aposta,
                           velocidade_por_loja_desaz)
 from core.sazonalidade import curva_por
-from core.taxonomia import faixa_preco, ordem_tamanhos, rotulo_grade
+from core.taxonomia import faixas_do_subgrupo, ordem_tamanhos, rotulo_grade
 
-ETAPAS = ["① Produto", "② Espelhos", "③ Projeção", "④ Distribuição"]
+ETAPAS = ["① Produto", "② Espelhos", "③ Projeção"]
+TODOS = "TODOS"
 
 
 def _foto(url):
@@ -38,21 +40,9 @@ def _foto_ampliada(url: str, nome: str) -> None:
     st.image(url, width="stretch")
 
 
-def _grupo_predominante(pp, subgrupo, tecido, desde=2022.0):
-    """Construção (grupo) mais comum do subgrupo+tecido no escopo.
-
-    A faixa de preço oficial é por grupo+subgrupo, mas a aba não pergunta mais a
-    construção ao usuário — o tecido já carrega essa informação.
-    """
-    esc = pp[(pp["desc_sub_grupo_wbg"] == subgrupo) & (pp["rank_colecao"] >= desde)]
-    com_tecido = esc[esc["grupo_material"] == tecido]
-    serie = (com_tecido if len(com_tecido) else esc)["desc_grupo_wgb"].dropna()
-    return serie.mode().iat[0] if len(serie) else "TECIDO PLANO"
-
-
 def _stepper(etapa: int, tem_form: bool, tem_proj: bool) -> None:
-    livres = [True, tem_form, tem_proj, tem_proj]
-    cols = st.columns(4)
+    livres = [True, tem_form, tem_proj]
+    cols = st.columns(len(ETAPAS))
     for i, (col, rotulo) in enumerate(zip(cols, ETAPAS)):
         n = i + 1
         if col.button(rotulo, key=f"etapa_btn_{n}", width="stretch",
@@ -63,12 +53,16 @@ def _stepper(etapa: int, tem_form: bool, tem_proj: bool) -> None:
     st.markdown("")
 
 
+def _rotulo_faixas(faixas) -> str:
+    return "/".join(faixas) if faixas else "—"
+
+
 def _contexto_form(form: dict) -> str:
     if not form:
         return ""
     ref = f"{form['sku_ref']} · " if form.get("sku_ref") else ""
-    return (f"{ref}{form['subgrupo']}/{form['tecido']} · R${form['preco']:.0f} · "
-            f"faixa {form.get('faixa') or '—'} · {form['colecao']}")
+    return (f"{ref}{form['subgrupo']}/{form['tecido']} · "
+            f"{_rotulo_faixas(form.get('faixas'))} · {form['colecao']}")
 
 
 # --------------------------------------------------------------------------- #
@@ -81,7 +75,7 @@ def _etapa_produto(cfg, pp) -> None:
                "projeta a aposta até o fim do período saudável.")
     form = st.session_state.get("formulario") or {}
 
-    # aposta nova começa SEM preenchimento: subgrupo, tecido e preço vazios
+    # aposta nova começa SEM preenchimento: subgrupo, tecido e faixas vazios
     # (voltando de uma etapa posterior, os valores do formulário são mantidos)
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -102,12 +96,26 @@ def _etapa_produto(cfg, pp) -> None:
                                help="Ordenadas por nº de modelos. Vazio = todas as cores; "
                                     "o filtro afrouxa sozinho se faltar espelho. Digite para buscar.")
     with c3:
-        preco = st.number_input("Preço sugerido (R$)", min_value=0.0,
-                                value=float(form["preco"]) if form.get("preco") else None,
-                                step=10.0, placeholder="ex.: 498")
+        reguas = faixas_do_subgrupo(subgrupo) if subgrupo else None
+        ops_fx = (sorted(reguas["faixa"].dropna().unique().tolist())
+                  if reguas is not None and len(reguas) else ["P1", "P2", "P3", "P4"])
+        faixas_sel = st.multiselect(
+            "Faixas de preço", ops_fx,
+            default=[f for f in (form.get("faixas") or []) if f in ops_fx],
+            help="Uma ou mais faixas. Cada produto é classificado na régua da "
+                 "PRÓPRIA construção (P4 de malha ≠ P4 de tecido plano em R$) — "
+                 "os intervalos aparecem abaixo ao escolher o subgrupo.")
         dt_padrao = pd.Timestamp(form["dt_entrada"]).date() if form.get("dt_entrada") else date.today()
         dt_entrada = st.date_input("Data de entrada em loja", value=dt_padrao, format="DD/MM/YYYY",
                                    help="Premissa dt_envio + 7 dias; posiciona a janela sazonal.")
+
+    if reguas is not None and len(reguas):
+        linhas_regua = []
+        for grupo_c, gdf in reguas.groupby("grupo"):
+            partes = " · ".join(f"{r.faixa} {r.de:.0f}–{r.ate:.0f}" for r in gdf.itertuples())
+            linhas_regua.append(f"**{grupo_c}**: {partes}")
+        st.caption("Réguas do subgrupo (R$) — " + " &nbsp;|&nbsp; ".join(linhas_regua) +
+                   ". Mudou o arquivo de faixas? Reinicie o app.")
 
     c4, c5, c6 = st.columns(3)
     with c4:
@@ -136,13 +144,11 @@ def _etapa_produto(cfg, pp) -> None:
                                          if t in {"38|PP", "40|P", "42|M", "44|G", "46|GG"}]
     grade_sel = st.multiselect(
         "Grade de tamanhos da aposta", todos_tam, default=grade_padrao,
-        help="Filtro: só entram como espelho os modelos que venderam TODOS os tamanhos da "
-             "grade (36≡XPP … 46≡GG). A grade também define as colunas da matriz.")
+        help="A grade NÃO filtra os espelhos: define as colunas da matriz de "
+             "distribuição e a curva de tamanhos (36≡XPP … 46≡GG). Tamanhos que "
+             "os espelhos não venderam são projetados pelo segmento.")
 
-    desde = float(cfg.get("desde_colecao", 2022.0))
-    pronto = subgrupo is not None and tecido is not None and preco is not None and preco > 0
-    grupo_faixa = _grupo_predominante(pp, subgrupo, tecido, desde=desde) if pronto else None
-    fx = faixa_preco(grupo_faixa, subgrupo, preco)["faixa"] if pronto else None
+    pronto = subgrupo is not None and tecido is not None and bool(faixas_sel)
     fim = fim_periodo_saudavel(colecao, cfg.get("fim_periodo_verao", "02/01"),
                                cfg.get("fim_periodo_inverno", "14/06"))
     if pd.Timestamp(dt_entrada) > pd.Timestamp(fim):
@@ -151,19 +157,20 @@ def _etapa_produto(cfg, pp) -> None:
     b, resto = st.columns([1.6, 4])
     if b.button("Buscar espelhos →", type="primary", width="stretch", disabled=not pronto):
         st.session_state["formulario"] = {
-            "subgrupo": subgrupo, "tecido": tecido, "cores": cores, "preco": float(preco),
+            "subgrupo": subgrupo, "tecido": tecido, "cores": cores,
+            "faixas": list(faixas_sel),
             "sku_ref": sku_ref, "colecao": colecao, "dt_entrada": str(dt_entrada),
             "aproveitamento_pct": int(aproveitamento), "reserva_pct": int(reserva),
-            "grade": grade_sel, "faixa": fx, "grupo_faixa": grupo_faixa,
+            "grade": grade_sel,
         }
         st.session_state["etapa"] = 2
         st.rerun()
     if pronto:
-        resto.caption(f"{subgrupo} · {tecido} · faixa {fx or '—'} · "
+        resto.caption(f"{subgrupo} · {tecido} · {_rotulo_faixas(faixas_sel)} · "
                       f"grade {rotulo_grade(set(grade_sel)) if grade_sel else '—'} · "
                       f"fim saudável {fim:%d/%m/%Y}")
     else:
-        resto.caption("Preencha **subgrupo, tecido e preço** para buscar os espelhos.")
+        resto.caption("Preencha **subgrupo, tecido e faixas de preço** para buscar os espelhos.")
 
 
 # --------------------------------------------------------------------------- #
@@ -211,32 +218,44 @@ def _etapa_espelhos(cfg, pp, fp) -> None:
     fim = fim_periodo_saudavel(form["colecao"], cfg.get("fim_periodo_verao", "02/01"),
                                cfg.get("fim_periodo_inverno", "14/06"))
     horizonte = semanas_ate(pd.Timestamp(form["dt_entrada"]).date(), fim)
-    estilo.banner([("faixa de preço", form.get("faixa") or "—"),
+    estilo.banner([("faixas de preço", _rotulo_faixas(form.get("faixas"))),
                    ("fim do período saudável", f"{fim:%d/%m/%Y}"),
                    ("horizonte", f"{horizonte} semanas"),
                    ("lojas-alvo", str(ctx["n_lojas_alvo"]))])
 
-    with st.spinner("Buscando espelhos comparáveis…"):
-        cand, soft = candidatos_espelho(
-            pp, subgrupo=form["subgrupo"], faixa=form.get("faixa"), tecido=form["tecido"],
-            cor_grupo=form.get("cores") or None, grade=form.get("grade") or None,
-            desde_colecao=desde)
-        curva, nivel = curva_por(fp, subgrupo=form["subgrupo"], material=form["tecido"])
-    if cand.empty:
-        st.warning("Nenhum candidato a espelho com esses filtros. Volte e reduza a grade, "
-                   "afrouxe a cor ou ajuste o preço.")
+    hoje = pd.Timestamp(date.today())
+    dias_ativo = int(cfg.get("dias_para_considerar_ativo", 60))
+    # candidatos+velocidades memoizados por formulário: cada clique de checkbox
+    # rerenderiza a página e, sem isto, recalculava o funil inteiro
+    chave_cache = repr((form, desde, dias_ativo, str(hoje.date())))
+    cache = st.session_state.get("_espelhos_cache") or {}
+    if cache.get("chave") != chave_cache:
+        with st.spinner("Buscando espelhos e calculando velocidades…"):
+            cand, soft = candidatos_espelho(
+                pp, subgrupo=form["subgrupo"], faixas=form.get("faixas"),
+                tecido=form["tecido"], cor_grupo=form.get("cores") or None,
+                desde_colecao=desde)
+            curva, nivel = curva_por(fp, subgrupo=form["subgrupo"], material=form["tecido"],
+                                     min_amostra=int(cfg.get("min_amostra_curva", 800)))
+            total_bruto = len(cand)
+            janelas = janelas_full_price(pp)
+            if not cand.empty:
+                cand = enriquecer_velocidade(cand, fp, curva, ctx["ecom_locs"],
+                                             janelas=janelas, ativo_ate=hoje,
+                                             dias_ativo=dias_ativo)
+        cache = {"chave": chave_cache, "cand": cand, "soft": soft, "curva": curva,
+                 "nivel": nivel, "total_bruto": total_bruto, "janelas": janelas}
+        st.session_state["_espelhos_cache"] = cache
+    cand, soft, curva = cache["cand"], cache["soft"], cache["curva"]
+    nivel, total_bruto, janelas = cache["nivel"], cache["total_bruto"], cache["janelas"]
+
+    if total_bruto == 0:
+        st.warning("Nenhum candidato a espelho com esses filtros. Volte e adicione "
+                   "faixas de preço ou afrouxe a cor.")
         if st.button("← Produto"):
             st.session_state["etapa"] = 1
             st.rerun()
         return
-
-    total_bruto = len(cand)
-    janelas = janelas_full_price(pp)
-    hoje = pd.Timestamp(date.today())
-    dias_ativo = int(cfg.get("dias_para_considerar_ativo", 60))
-    with st.spinner("Calculando a velocidade dos candidatos…"):
-        cand = enriquecer_velocidade(cand, fp, curva, ctx["ecom_locs"], janelas=janelas,
-                                     ativo_ate=hoje, dias_ativo=dias_ativo)
     if cand.empty:
         st.warning(f"Os {total_bruto} candidatos encontrados nunca venderam full price. "
                    "Volte e afrouxe os filtros.")
@@ -248,8 +267,6 @@ def _etapa_espelhos(cfg, pp, fp) -> None:
     st.subheader(f"Candidatos a espelho ({len(cand)}) — curva sazonal: {nivel}")
     ocultos = total_bruto - len(cand)
     notas = []
-    if form.get("grade"):
-        notas.append(f"só espelhos que venderam a grade {rotulo_grade(set(form['grade']))}")
     if form.get("cores"):
         notas.append("cor mantida" if "cor_grupo" in soft else "cor afrouxada (poucos candidatos)")
     if ocultos:
@@ -284,8 +301,8 @@ def _etapa_espelhos(cfg, pp, fp) -> None:
     if b2.button(f"Projetar aposta ({len(marcados)} espelho{plural}) →", type="primary",
                  width="stretch", disabled=not marcados):
         with st.spinner("Projetando a aposta…"):
-            _projetar(cfg, pp, fp, cand, curva, ctx, sorted(marcados), horizonte, janelas,
-                      hoje, dias_ativo, desde, fim)
+            _calcular_base(cfg, pp, fp, cand, curva, ctx, sorted(marcados), horizonte,
+                           janelas, hoje, dias_ativo, desde, fim)
         st.session_state["etapa"] = 3
         st.rerun()
 
@@ -293,8 +310,12 @@ def _etapa_espelhos(cfg, pp, fp) -> None:
 # --------------------------------------------------------------------------- #
 # Projeção (cálculo — motor de sempre)
 # --------------------------------------------------------------------------- #
-def _projetar(cfg, pp, fp, cand, curva, ctx, escolhidos, horizonte, janelas,
-              hoje, dias_ativo, desde, fim) -> None:
+def _calcular_base(cfg, pp, fp, cand, curva, ctx, escolhidos, horizonte, janelas,
+                   hoje, dias_ativo, desde, fim) -> None:
+    """Parte PESADA da projeção (roda na transição 2→3): velocidades dos
+    espelhos, participações, curva de tamanhos e contribuições. Fica em
+    `projecao_base` (objetos Python, nunca vai ao payload); o dimensionamento
+    pelo parque é leve e roda na etapa 3 a cada mudança de Perfil/Clima."""
     form = st.session_state["formulario"]
     vels = [velocidade_por_loja_desaz(fp, s, curva, ctx["ecom_locs"], janela=janelas.get(s),
                                       ativo_ate=hoje, dias_ativo=dias_ativo)
@@ -303,10 +324,6 @@ def _projetar(cfg, pp, fp, cand, curva, ctx, escolhidos, horizonte, janelas,
     if not vels:
         st.error("Os espelhos escolhidos não têm histórico de venda no escopo Souq.")
         st.stop()
-    ap = projetar_aposta(vels, curva, pd.Timestamp(form["dt_entrada"]), ctx["n_lojas_alvo"],
-                         horizonte_semanas=horizonte,
-                         aproveitamento=form["aproveitamento_pct"] / 100.0,
-                         reserva_cd_pct=form["reserva_pct"] / 100.0)
 
     skus = [v.cod_sku_pai for v in vels]
     fisico = ~fp["sk_localidade"].isin(ctx["ecom_locs"])
@@ -321,43 +338,74 @@ def _projetar(cfg, pp, fp, cand, curva, ctx, escolhidos, horizonte, janelas,
     participacoes = participacao_lojas(fp_pool_fisico) or part_espelhos
     n_pool = int(fp_pool_fisico["cod_sku_pai"].nunique())
 
-    curva_tam = curva_tamanhos(fp[fp["cod_sku_pai"].isin(skus)], pp, col_tamanho="tamanho_grupo")
     grade_sel = form.get("grade") or []
-    if grade_sel:
-        curva_tam = {t: p for t, p in curva_tam.items() if t in set(grade_sel)}
-        piso = min(curva_tam.values()) / 2 if curva_tam else 1.0
-        for t in grade_sel:
-            curva_tam.setdefault(t, piso)
-        curva_tam = {t: curva_tam[t] for t in grade_sel if t in curva_tam}
+    curva_tam, curva_origem, avisos_curva = curva_tamanhos_grade(
+        fp, pp, skus, grade_sel, subgrupo=form["subgrupo"], tecido=form["tecido"],
+        fits=fits or None, desde_colecao=desde)
 
     nomes = cand.drop_duplicates("cod_sku_pai").set_index("cod_sku_pai")["desc_item"].to_dict()
     contribuicoes = [(str(nomes.get(v.cod_sku_pai) or v.cod_sku_pai), v.vel_por_loja_desaz)
                      for v in sorted(vels, key=lambda x: -x.vel_por_loja_desaz)]
 
+    st.session_state["projecao_base"] = {
+        "vels": vels, "curva": curva, "horizonte": horizonte, "fim": fim,
+        "skus": skus, "fits": fits, "n_pool": n_pool,
+        "participacoes": participacoes, "part_espelhos": part_espelhos,
+        "curva_tam": curva_tam, "curva_origem": curva_origem,
+        "avisos_curva": avisos_curva, "contribuicoes": contribuicoes,
+    }
+    st.session_state.pop("distribuicao", None)
+    _dimensionar(_parque_sel("parque_perfis"), _parque_sel("parque_climas"))
+
+
+def _parque_sel(chave: str):
+    """Seleção de Perfil/Clima do widget → None (todas) ou lista."""
+    sel = st.session_state.get(chave) or [TODOS]
+    return None if (TODOS in sel or not sel) else list(sel)
+
+
+def _dimensionar(perfis=None, climas=None):
+    """Parte LEVE da projeção: dimensiona a aposta pelo parque Perfil/Clima e
+    monta o payload v2. A venda física escala com o nº de lojas do parque; o
+    Ecom entra integral (não é loja física). Retorna None se o parque é vazio."""
+    base = st.session_state["projecao_base"]
+    form = st.session_state["formulario"]
+    n = len(lojas_alvo_souq(perfis=perfis, climas=climas))
+    if n == 0:
+        return None
+    ap = projetar_aposta(base["vels"], base["curva"], pd.Timestamp(form["dt_entrada"]), n,
+                         horizonte_semanas=base["horizonte"],
+                         aproveitamento=form["aproveitamento_pct"] / 100.0,
+                         reserva_cd_pct=form["reserva_pct"] / 100.0)
+    fim = base["fim"]
     ref = f"{form['sku_ref']} · " if form.get("sku_ref") else ""
     projecao = {
-        "resumo": (f"{ref}{form['subgrupo']}/{form['tecido']} · R${form['preco']:.0f} · "
-                   f"faixa {form.get('faixa')} · {form['colecao']}"),
+        "versao": 2,
+        "resumo": (f"{ref}{form['subgrupo']}/{form['tecido']} · "
+                   f"{_rotulo_faixas(form.get('faixas'))} · {form['colecao']}"),
         "aposta_total": ap.aposta_sugerida,
+        "aposta_final": ap.aposta_sugerida,
+        "parque": {"perfis": perfis, "climas": climas, "n_lojas_alvo": n},
         "reserva_cd_pct": form["reserva_pct"] / 100.0,
-        "participacoes_hist": participacoes,
-        "participacoes_espelhos": part_espelhos,
-        "curva_tamanhos": curva_tam,
+        "participacoes_hist": base["participacoes"],
+        "participacoes_espelhos": base["part_espelhos"],
+        "curva_tamanhos": base["curva_tam"],
+        "curva_origem": base["curva_origem"],
         # o teto de cobertura deriva desta média × participação da loja — medir a
         # velocidade em janelas individuais por loja invertia o ranking (loja
         # grande de janela longa parecia lenta e era travada pelo teto)
         "vel_media_loja": ap.vel_por_loja_desaz,
-        "espelhos": skus,
-        "suavizacao": {"n_modelos": n_pool, "fits": fits},
-        "lojas_com_espelho_proprio": sorted(part_espelhos),
-        "contribuicoes": contribuicoes,
+        "espelhos": base["skus"],
+        "suavizacao": {"n_modelos": base["n_pool"], "fits": base["fits"]},
+        "lojas_com_espelho_proprio": sorted(base["part_espelhos"]),
+        "contribuicoes": base["contribuicoes"],
         "inputs": {
             "sku_ref": form.get("sku_ref"), "subgrupo": form["subgrupo"],
-            "tecido": form["tecido"], "cores": form.get("cores"), "grade": grade_sel,
-            "preco": form["preco"], "dt_entrada": form["dt_entrada"],
+            "tecido": form["tecido"], "cores": form.get("cores"),
+            "grade": form.get("grade") or [],
+            "faixas": form.get("faixas"), "dt_entrada": form["dt_entrada"],
             "colecao": form["colecao"], "aproveitamento": form["aproveitamento_pct"] / 100.0,
-            "horizonte_semanas": horizonte, "faixa": form.get("faixa"),
-            "grupo_faixa": form.get("grupo_faixa"), "fim_periodo": f"{fim:%d/%m/%Y}",
+            "horizonte_semanas": base["horizonte"], "fim_periodo": f"{fim:%d/%m/%Y}",
         },
         "resultado": {
             "venda_projetada": ap.venda_projetada, "venda_ecom": ap.venda_ecom,
@@ -365,40 +413,59 @@ def _projetar(cfg, pp, fp, cand, curva, ctx, escolhidos, horizonte, janelas,
             "semanas_equivalentes": ap.semanas_equivalentes,
             "vel_por_loja_desaz": ap.vel_por_loja_desaz,
         },
-        "avisos_projecao": list(ap.avisos),
+        "avisos_projecao": list(ap.avisos) + base["avisos_curva"],
     }
     st.session_state["projecao"] = projecao
-    st.session_state.pop("distribuicao", None)
-
-    try:
-        from core import historico
-
-        historico.salvar(projecao["resumo"], projecao)
-        st.session_state["flash_salvo"] = True
-    except Exception:
-        st.session_state["flash_salvo"] = False
-
-    # os campos NÃO limpam aqui: o comprador pode voltar e mudar espelhos ou
-    # inputs. A limpeza total acontece no "Salvar distribuição no Histórico".
+    return projecao
 
 
 # --------------------------------------------------------------------------- #
-# Etapa 3 — Projeção (exibição)
+# Etapa 3 — Projeção (parque + aposta final + salvar)
 # --------------------------------------------------------------------------- #
 def _etapa_projecao() -> None:
-    proj = st.session_state["projecao"]
+    base = st.session_state.get("projecao_base")
+    form = st.session_state.get("formulario") or {}
+    ao_vivo = bool(base and form)
+
+    if ao_vivo:
+        # REDUTORES DE APOSTA: a aposta é dimensionada só pelas lojas dos
+        # perfis/climas escolhidos; a distribuição herda o mesmo parque.
+        disp = opcoes_perfil_clima()
+        c1, c2 = st.columns(2)
+        c1.multiselect("Perfil Econômico", [TODOS] + disp["perfis"],
+                       default=st.session_state.get("parque_perfis") or [TODOS],
+                       key="parque_perfis",
+                       help="Redutor de aposta: só as lojas destes perfis dimensionam "
+                            "a compra — e são as únicas que recebem na distribuição.")
+        c2.multiselect("Clima", [TODOS] + disp["climas"],
+                       default=st.session_state.get("parque_climas") or [TODOS],
+                       key="parque_climas",
+                       help="Redutor de aposta: idem, pelo clima da loja.")
+        proj = _dimensionar(_parque_sel("parque_perfis"), _parque_sel("parque_climas"))
+        if proj is None:
+            st.warning("Nenhuma loja ativa com esse Perfil/Clima — afrouxe a seleção.")
+            return
+    else:
+        proj = st.session_state["projecao"]
+        st.caption("Cenário sem a base de cálculo nesta sessão (recarregado). Os valores "
+                   "são os projetados; para mudar o parque, volte à etapa ② e projete "
+                   "de novo.")
+
     res = proj.get("resultado") or {}
     ins = proj.get("inputs") or {}
+    parque = proj.get("parque") or {}
     st.caption(f"Projeção: {proj['resumo']} · {len(proj.get('espelhos') or [])} espelho(s)")
 
-    k1, k2, k3, k4 = st.columns(4)
+    k1, k2, k3, k4, k5 = st.columns(5)
     estilo.kpi(k1, "Aposta total", f"{res.get('aposta_sugerida', proj['aposta_total']):.0f}",
                "unidades", escuro=True)
     estilo.kpi(k2, "Venda projetada", f"{res.get('venda_projetada', 0):.0f}",
                f"{res.get('semanas_equivalentes', 0):.1f} semanas-equivalentes")
     estilo.kpi(k3, "Reserva CD", f"{res.get('reserva_cd', 0):.0f}",
                f"{100 * proj.get('reserva_cd_pct', 0):.0f}% da aposta")
-    estilo.kpi(k4, "Fim saudável", ins.get("fim_periodo") or "—",
+    estilo.kpi(k4, "Lojas-alvo", f"{parque.get('n_lojas_alvo') or '—'}",
+               "parque desta aposta")
+    estilo.kpi(k5, "Fim saudável", ins.get("fim_periodo") or "—",
                f"coleção {ins.get('colecao') or '—'}")
     st.markdown("")
     for aviso in proj.get("avisos_projecao") or []:
@@ -408,25 +475,70 @@ def _etapa_projecao() -> None:
         fits = suav.get("fits") or []
         st.caption(f"Participação por loja suavizada com {suav['n_modelos']} modelos do "
                    "segmento" + (f" (fit: {', '.join(fits)})" if fits else "") + ".")
-    if st.session_state.get("flash_salvo"):
-        st.caption(":green[Cenário salvo no Histórico ✓]")
 
     if proj.get("curva_tamanhos"):
         st.subheader("Curva de tamanhos")
         estilo.barras_tamanho(proj["curva_tamanhos"],
                               float(res.get("aposta_sugerida", proj["aposta_total"])))
+        projetados = [t for t, o in (proj.get("curva_origem") or {}).items()
+                      if o != "espelhos"]
+        if projetados:
+            st.caption(f"Tamanhos projetados pelo segmento (sem venda nos espelhos): "
+                       f"{', '.join(projetados)}.")
     if proj.get("contribuicoes"):
         st.subheader("Contribuição dos espelhos")
         estilo.barras_contribuicao(proj["contribuicoes"])
 
     st.markdown("")
-    b1, b2, _ = st.columns([1.4, 1.6, 3])
+    if ao_vivo:
+        sug = int(round(float(proj["aposta_total"])))
+        sug_ant = st.session_state.get("_sug_anterior")
+        if "aposta_final_edit" not in st.session_state:
+            st.session_state["aposta_final_edit"] = sug
+        elif (sug_ant is not None and sug != sug_ant
+              and st.session_state["aposta_final_edit"] == sug_ant):
+            # o parque mudou e o comercial não tinha editado: acompanha a sugerida
+            st.session_state["aposta_final_edit"] = sug
+        st.session_state["_sug_anterior"] = sug
+        af, _ = st.columns([1.6, 4])
+        aposta_final = af.number_input(
+            "Aposta final (un)", min_value=0, step=5, key="aposta_final_edit",
+            help="O modelo sugere, o comercial decide — é este valor que vai ao "
+                 "Histórico e à distribuição.")
+        if int(aposta_final) != sug:
+            af.caption(f"Modelo sugeriu **{sug} un**.")
+        proj["aposta_final"] = float(aposta_final)
+        st.caption("Ainda não salvo — **Salvar aposta no Histórico** encerra o ciclo; "
+                   "a distribuição parte da aba Histórico.")
+
+    b1, b2, _ = st.columns([1.4, 2.2, 2.4])
     if b1.button("← Espelhos", width="stretch"):
         st.session_state["etapa"] = 2
         st.rerun()
-    if b2.button("Distribuir →", type="primary", width="stretch"):
-        st.session_state["etapa"] = 4
-        st.rerun()
+    if ao_vivo and b2.button("Salvar aposta no Histórico", type="primary", width="stretch"):
+        try:
+            from core import historico
+
+            with st.spinner("Salvando no Histórico…"):
+                historico.salvar(proj["resumo"], proj)
+            salvou = True
+        except Exception:
+            salvou = False
+        if salvou:
+            for k in ("projecao", "projecao_base", "distribuicao", "sel_todos_esp",
+                      "registro_id", "parque_perfis", "parque_climas",
+                      "aposta_final_edit", "_sug_anterior", "_espelhos_cache"):
+                st.session_state.pop(k, None)
+            for k in [k for k in st.session_state if str(k).startswith("esp_")]:
+                st.session_state.pop(k, None)
+            st.session_state["formulario"] = {}
+            st.session_state["espelhos_marcados"] = []
+            st.session_state["etapa"] = 1
+            st.session_state["flash_ciclo"] = ("Aposta salva no Histórico ✓ — "
+                                               "distribua pela aba Histórico.")
+            st.rerun()
+        else:
+            st.error("Não foi possível salvar no Histórico. Tente de novo.")
 
 
 # --------------------------------------------------------------------------- #
@@ -451,7 +563,7 @@ def render() -> None:
         # com o formulário já limpo (pós-projeção), o contexto vem da projeção
         contexto = _contexto_form(form) or (proj["resumo"] if proj else "")
     if contexto:
-        t2.caption(f"Etapa {etapa} de 4 · {contexto}")
+        t2.caption(f"Etapa {etapa} de {len(ETAPAS)} · {contexto}")
 
     _stepper(etapa, tem_form=bool(form), tem_proj=bool(proj))
 
@@ -459,11 +571,5 @@ def render() -> None:
         _etapa_produto(cfg, pp)
     elif etapa == 2:
         _etapa_espelhos(cfg, pp, fp)
-    elif etapa == 3:
-        _etapa_projecao()
     else:
-        st.caption(f"Projeção: {proj['resumo']}")
-        distribuicao.secao(proj)
-        if st.button("← Projeção"):
-            st.session_state["etapa"] = 3
-            st.rerun()
+        _etapa_projecao()

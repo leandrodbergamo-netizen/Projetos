@@ -2,8 +2,8 @@ import pandas as pd
 import pytest
 
 from core.dados import filtrar_colecoes, rank_colecao
-from core.espelho import (candidatos_espelho, pool_suavizacao, projetar_aposta,
-                          velocidade_por_loja_desaz)
+from core.espelho import (candidatos_espelho, curva_tamanhos_grade, pool_suavizacao,
+                          projetar_aposta, velocidade_por_loja_desaz)
 from core.regra_distribuicao import participacao_com_loja_nova
 
 CURVA_NEUTRA = pd.DataFrame({"semana": list(range(1, 54)), "indice": [100.0] * 53})
@@ -67,7 +67,7 @@ class TestCandidatosEspelho:
         cat = _catalogo([("A", "Azul", "MANGA LONGA", "INVERNO 2023"),
                          ("B", "Azul", "SEM MANGA", "INVERNO 2023")])
         cand, _ = candidatos_espelho(cat, subgrupo="VESTIDO", grupo="TECIDO PLANO",
-                                     faixa="P1", tecido="Linho", cor_grupo="Azul")
+                                     faixas="P1", tecido="Linho", cor_grupo="Azul")
         assert sorted(cand["cod_sku_pai"]) == ["A", "B"]
 
     def test_cor_filtra_mas_afrouxa_se_faltar_candidato(self):
@@ -75,17 +75,18 @@ class TestCandidatosEspelho:
                          ("B", "Preto", "MANGA LONGA", "INVERNO 2023")])
         # com min_candidatos=1 a cor segura o filtro
         cand, soft = candidatos_espelho(cat, subgrupo="VESTIDO", grupo="TECIDO PLANO",
-                                        faixa="P1", tecido="Linho", cor_grupo="Azul",
+                                        faixas="P1", tecido="Linho", cor_grupo="Azul",
                                         min_candidatos=1)
         assert cand["cod_sku_pai"].tolist() == ["A"] and soft == ["cor_grupo"]
         # exigindo 2, a cor é afrouxada e o Preto entra
         cand, soft = candidatos_espelho(cat, subgrupo="VESTIDO", grupo="TECIDO PLANO",
-                                        faixa="P1", tecido="Linho", cor_grupo="Azul",
+                                        faixas="P1", tecido="Linho", cor_grupo="Azul",
                                         min_candidatos=2)
         assert sorted(cand["cod_sku_pai"]) == ["A", "B"] and soft == []
 
-    def test_grade_exige_espelho_que_cubra_todos_os_tamanhos(self):
-        # A: PP–GG completo | B: só P–G | C: numerário 36–46 (≡ XPP–GG, cobre)
+    def test_grade_nao_filtra_espelhos(self):
+        # decisão de 08/2026: a grade é insumo da DISTRIBUIÇÃO (colunas da
+        # matriz); espelho que não vendeu todos os tamanhos continua candidato.
         def linhas(sku, tams):
             return [{"cod_sku_pai": sku, "desc_sub_grupo_wbg": "VESTIDO",
                      "desc_grupo_wgb": "TECIDO PLANO", "faixa": "P1",
@@ -94,37 +95,37 @@ class TestCandidatosEspelho:
                      "desc_colecao": "INVERNO 2023", "rank_colecao": 2023.0,
                      "desc_item": sku, "preco": 498.0, "tamanho_grupo": t}
                     for t in tams]
-        import pandas as pd
-        alvo = ["38|PP", "40|P", "42|M", "44|G", "46|GG"]
         cat = pd.DataFrame(
-            linhas("A", alvo)
-            + linhas("B", ["40|P", "42|M", "44|G"])
-            + linhas("C", ["36|XPP"] + alvo)          # numerário unificado: superset
-        )
+            linhas("A", ["38|PP", "40|P", "42|M", "44|G", "46|GG"])
+            + linhas("B", ["40|P", "42|M", "44|G"]))
         cand, soft = candidatos_espelho(cat, subgrupo="VESTIDO", grupo="TECIDO PLANO",
-                                        faixa="P1", tecido="Linho", grade=alvo,
-                                        min_candidatos=1)
-        assert sorted(cand["cod_sku_pai"].unique()) == ["A", "C"]   # B não cobre PP/GG
-        assert soft == []   # grade é hard, não aparece na lista de softs
+                                        faixas="P1", tecido="Linho", min_candidatos=1)
+        assert sorted(cand["cod_sku_pai"].unique()) == ["A", "B"]
+        assert soft == []
 
-    def test_grade_e_filtro_fixo_nao_afrouxa(self):
-        # pedido do negócio: a grade FILTRA os produtos que compõem a distribuição.
-        # Sem espelho que cubra a grade, o resultado é vazio (nunca afrouxa).
-        def linhas(sku, tams):
-            return [{"cod_sku_pai": sku, "desc_sub_grupo_wbg": "VESTIDO",
-                     "desc_grupo_wgb": "TECIDO PLANO", "faixa": "P1",
-                     "grupo_material": "Linho", "cor_grupo": "Azul",
-                     "desc_manga": None, "desc_comprimento": None, "desc_fit": None,
-                     "desc_colecao": "INVERNO 2023", "rank_colecao": 2023.0,
-                     "desc_item": sku, "preco": 498.0, "tamanho_grupo": t}
-                    for t in tams]
-        import pandas as pd
-        cat = pd.DataFrame(linhas("B", ["40|P", "42|M", "44|G"]))
-        cand, soft = candidatos_espelho(cat, subgrupo="VESTIDO", grupo="TECIDO PLANO",
-                                        faixa="P1", tecido="Linho",
-                                        grade=["38|PP", "40|P", "42|M", "44|G", "46|GG"],
-                                        min_candidatos=1)
-        assert cand.empty and soft == []
+    def test_multiplas_faixas_cada_produto_na_regua_da_propria_construcao(self):
+        # cenário "Regata Berna": mesmo preço é P4 na régua de MALHA e P1 na de
+        # TECIDO PLANO. Selecionando as faixas direto, cada produto responde pela
+        # faixa calculada na régua da própria construção.
+        cat = _catalogo([("PLANO", "Azul", None, "INVERNO 2023"),
+                         ("BERNA", "Azul", None, "INVERNO 2023")])
+        cat.loc[cat["cod_sku_pai"] == "BERNA", "desc_grupo_wgb"] = "MALHA"
+        cat.loc[cat["cod_sku_pai"] == "BERNA", "faixa"] = "P4"
+        cand, _ = candidatos_espelho(cat, subgrupo="VESTIDO", faixas=["P1", "P4"],
+                                     tecido="Linho", min_candidatos=1)
+        assert sorted(cand["cod_sku_pai"]) == ["BERNA", "PLANO"]
+        cand, _ = candidatos_espelho(cat, subgrupo="VESTIDO", faixas=["P4"],
+                                     tecido="Linho", min_candidatos=1)
+        assert cand["cod_sku_pai"].tolist() == ["BERNA"]
+
+    def test_faixas_vazia_ou_none_nao_filtra(self):
+        cat = _catalogo([("A", "Azul", None, "INVERNO 2023"),
+                         ("B", "Azul", None, "INVERNO 2023")])
+        cat.loc[cat["cod_sku_pai"] == "B", "faixa"] = "P3"
+        for faixas in (None, []):
+            cand, _ = candidatos_espelho(cat, subgrupo="VESTIDO", faixas=faixas,
+                                         tecido="Linho", min_candidatos=1)
+            assert sorted(cand["cod_sku_pai"]) == ["A", "B"]
 
     def test_grupo_construcao_e_opcional(self):
         # a aba de aposta não pergunta mais a construção: sem `grupo`, modelos de
@@ -132,12 +133,12 @@ class TestCandidatosEspelho:
         cat = _catalogo([("A", "Azul", None, "INVERNO 2023"),
                          ("B", "Azul", None, "INVERNO 2023")])
         cat.loc[cat["cod_sku_pai"] == "B", "desc_grupo_wgb"] = "MALHA"
-        cand, _ = candidatos_espelho(cat, subgrupo="VESTIDO", faixa="P1",
+        cand, _ = candidatos_espelho(cat, subgrupo="VESTIDO", faixas="P1",
                                      tecido="Linho", cor_grupo="Azul")
         assert sorted(cand["cod_sku_pai"]) == ["A", "B"]
         # informando o grupo, ele volta a filtrar
         cand, _ = candidatos_espelho(cat, subgrupo="VESTIDO", grupo="MALHA",
-                                     faixa="P1", tecido="Linho", cor_grupo="Azul")
+                                     faixas="P1", tecido="Linho", cor_grupo="Azul")
         assert cand["cod_sku_pai"].tolist() == ["B"]
 
     def test_colecao_fora_do_escopo_nao_vira_candidato(self):
@@ -146,7 +147,7 @@ class TestCandidatosEspelho:
                          ("V", "Azul", "MANGA LONGA", "ALTO VERÃO 2024 2025"),
                          ("O", "Azul", "MANGA LONGA", "INVERNO 2019")])
         cand, _ = candidatos_espelho(cat, subgrupo="VESTIDO", grupo="TECIDO PLANO",
-                                     faixa="P1", tecido="Linho", cor_grupo="Azul",
+                                     faixas="P1", tecido="Linho", cor_grupo="Azul",
                                      min_candidatos=1)
         assert cand["cod_sku_pai"].tolist() == ["A"]
 
@@ -171,6 +172,108 @@ class TestPoolSuavizacao:
         assert pool == {"A"}
         pool = pool_suavizacao(cat, subgrupo="VESTIDO", tecido="Linho", fits=None)
         assert pool == {"A", "B"}
+
+
+def _cat_tamanhos(linhas):
+    """linhas = [(cod_sku_pai, sk_produto, tamanho_grupo, tecido, fit)]"""
+    return pd.DataFrame([
+        {"cod_sku_pai": s, "sk_produto": sk, "tamanho_grupo": t,
+         "desc_sub_grupo_wbg": "VESTIDO", "grupo_material": tec, "desc_fit": fit,
+         "rank_colecao": 2023.0}
+        for s, sk, t, tec, fit in linhas
+    ])
+
+
+def _vendas_tamanhos(linhas):
+    """linhas = [(sk_produto, cod_sku_pai, qtd)]"""
+    return pd.DataFrame([{"sk_produto": sk, "cod_sku_pai": s, "qtd_produto": q}
+                         for sk, s, q in linhas])
+
+
+class TestCurvaTamanhosGrade:
+    GRADE = ["40|P", "42|M", "46|GG"]
+
+    def test_corta_tamanhos_fora_da_grade_e_preserva_proporcao(self):
+        # espelho E vendeu P=2, M=1 e U=7 (U fora da grade [P, M]): U é cortado
+        # e a proporção P:M (2:1) é preservada; tudo origem "espelhos".
+        cat = _cat_tamanhos([("E", 1, "40|P", "Linho", "RETO"),
+                             ("E", 2, "42|M", "Linho", "RETO"),
+                             ("E", 3, "U", "Linho", "RETO")])
+        ven = _vendas_tamanhos([(1, "E", 2), (2, "E", 1), (3, "E", 7)])
+        curva, origem, avisos = curva_tamanhos_grade(
+            ven, cat, ["E"], ["40|P", "42|M"], subgrupo="VESTIDO", tecido="Linho")
+        assert list(curva) == ["40|P", "42|M"]
+        assert curva["40|P"] / curva["42|M"] == pytest.approx(2.0)
+        assert set(origem.values()) == {"espelhos"}
+        assert avisos == []
+
+    def test_faltante_projetado_com_calibracao_pelos_comuns(self):
+        # espelhos E: P=1, M=1 (sem GG). Pool = {E, Z}; Z: P=3, M=3, GG=4.
+        # Vendas do pool: P=4, M=4, GG=4 -> curva 1/3 cada; comuns P+M somam 1.0
+        # no espelho e 2/3 no pool => escala 1.5 => GG = (1/3)*1.5 = 0.5.
+        cat = _cat_tamanhos([("E", 1, "40|P", "Linho", "RETO"),
+                             ("E", 2, "42|M", "Linho", "RETO"),
+                             ("Z", 4, "40|P", "Linho", "RETO"),
+                             ("Z", 5, "42|M", "Linho", "RETO"),
+                             ("Z", 6, "46|GG", "Linho", "RETO")])
+        ven = _vendas_tamanhos([(1, "E", 1), (2, "E", 1),
+                                (4, "Z", 3), (5, "Z", 3), (6, "Z", 4)])
+        curva, origem, avisos = curva_tamanhos_grade(
+            ven, cat, ["E"], self.GRADE, subgrupo="VESTIDO", tecido="Linho")
+        assert origem == {"40|P": "espelhos", "42|M": "espelhos", "46|GG": "pool_tecido"}
+        assert curva["46|GG"] == pytest.approx(0.5)
+        assert any("46|GG" in a and "subgrupo+tecido" in a for a in avisos)
+
+    def test_cadeia_de_pools_fit_depois_tecido_depois_subgrupo(self):
+        # pool do fit RETO não tem GG; quem tem é o AMPLO (mesmo tecido) -> o
+        # nível fit é pulado e o tamanho vem do pool subgrupo+tecido.
+        cat = _cat_tamanhos([("E", 1, "40|P", "Linho", "RETO"),
+                             ("F", 2, "40|P", "Linho", "RETO"),
+                             ("A", 3, "40|P", "Linho", "AMPLO"),
+                             ("A", 4, "46|GG", "Linho", "AMPLO")])
+        ven = _vendas_tamanhos([(1, "E", 4), (2, "F", 2), (3, "A", 1), (4, "A", 1)])
+        curva, origem, _ = curva_tamanhos_grade(
+            ven, cat, ["E"], ["40|P", "46|GG"], subgrupo="VESTIDO", tecido="Linho",
+            fits=["RETO"])
+        assert origem["46|GG"] == "pool_tecido"
+        # e se nem o tecido tiver o tamanho, afrouxa para o subgrupo inteiro
+        cat.loc[cat["cod_sku_pai"] == "A", "grupo_material"] = "Tricot"
+        curva, origem, _ = curva_tamanhos_grade(
+            ven, cat, ["E"], ["40|P", "46|GG"], subgrupo="VESTIDO", tecido="Linho",
+            fits=["RETO"])
+        assert origem["46|GG"] == "pool_subgrupo"
+
+    def test_sem_pool_com_o_tamanho_usa_piso(self):
+        cat = _cat_tamanhos([("E", 1, "40|P", "Linho", "RETO"),
+                             ("E", 2, "42|M", "Linho", "RETO")])
+        ven = _vendas_tamanhos([(1, "E", 4), (2, "E", 2)])
+        curva, origem, avisos = curva_tamanhos_grade(
+            ven, cat, ["E"], self.GRADE, subgrupo="VESTIDO", tecido="Linho")
+        assert origem["46|GG"] == "piso"
+        # piso = menor peso presente / 2 (M = 2/6) -> GG = 1/6
+        assert curva["46|GG"] == pytest.approx(min(curva["40|P"], curva["42|M"]) / 2)
+        assert any("piso" in a for a in avisos)
+
+    def test_espelho_sem_venda_na_grade_usa_pool_direto(self):
+        # espelho E só vendeu U (fora da grade): a curva do pool entra direto.
+        cat = _cat_tamanhos([("E", 1, "U", "Linho", "RETO"),
+                             ("Z", 2, "40|P", "Linho", "RETO"),
+                             ("Z", 3, "42|M", "Linho", "RETO")])
+        ven = _vendas_tamanhos([(1, "E", 5), (2, "Z", 3), (3, "Z", 1)])
+        curva, origem, _ = curva_tamanhos_grade(
+            ven, cat, ["E"], ["40|P", "42|M"], subgrupo="VESTIDO", tecido="Linho")
+        assert set(origem.values()) == {"pool_tecido"}
+        assert curva["40|P"] / curva["42|M"] == pytest.approx(3.0)
+
+    def test_resultado_na_ordem_da_grade(self):
+        cat = _cat_tamanhos([("E", 1, "40|P", "Linho", "RETO"),
+                             ("E", 2, "42|M", "Linho", "RETO"),
+                             ("E", 3, "46|GG", "Linho", "RETO")])
+        ven = _vendas_tamanhos([(1, "E", 1), (2, "E", 2), (3, "E", 3)])
+        grade = ["46|GG", "40|P", "42|M"]     # ordem proposital fora do padrão
+        curva, _, _ = curva_tamanhos_grade(
+            ven, cat, ["E"], grade, subgrupo="VESTIDO", tecido="Linho")
+        assert list(curva) == grade
 
 
 class TestVelocidadeEspelho:
@@ -215,6 +318,19 @@ class TestProjetarAposta:
         assert ap.venda_ecom == pytest.approx(50.0)             # 5 * 10
         assert ap.venda_projetada == pytest.approx(10 * 20 * 10 + 50)
         assert ap.aposta_sugerida == pytest.approx(2050.0)
+
+    def test_parque_reduzido_reduz_o_fisico_e_preserva_o_ecom(self):
+        # semântica do REDUTOR Perfil/Clima da etapa Projeção: menos lojas no
+        # parque => venda física cai proporcional; o Ecom não é loja e não muda.
+        reg = [("2024-01-03", 1, 10, "X"), ("2024-01-03", 456, 5, "X")]
+        ve = velocidade_por_loja_desaz(_vendas(reg), "X", CURVA_NEUTRA, ecom_locs={456})
+        cheio = projetar_aposta([ve], CURVA_NEUTRA, "2024-01-01", 20,
+                                horizonte_semanas=10, aproveitamento=1.0, reserva_cd_pct=0.0)
+        reduzido = projetar_aposta([ve], CURVA_NEUTRA, "2024-01-01", 5,
+                                   horizonte_semanas=10, aproveitamento=1.0, reserva_cd_pct=0.0)
+        assert reduzido.venda_ecom == cheio.venda_ecom == pytest.approx(50.0)
+        assert (reduzido.venda_projetada - reduzido.venda_ecom) == pytest.approx(
+            (cheio.venda_projetada - cheio.venda_ecom) * 5 / 20)
 
     def test_avisa_que_ecom_entra_na_aposta(self):
         reg = [("2024-01-03", 1, 10, "X"), ("2024-01-03", 456, 5, "X")]

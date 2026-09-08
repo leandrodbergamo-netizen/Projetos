@@ -262,6 +262,20 @@ def faixa_preco_series(grupos, subgrupos, precos, caminho: Optional[str] = None)
     return escolha.reindex(range(len(prod)))
 
 
+def faixas_do_subgrupo(subgrupo, caminho: Optional[str] = None) -> pd.DataFrame:
+    """Réguas de preço do subgrupo, por construção.
+
+    Colunas [grupo, faixa, de, ate, moq], ordenadas por (grupo, de). O mesmo
+    rótulo (P1..P4) cobre intervalos de R$ diferentes conforme a construção —
+    é esta tabela que a UI mostra ao lado do multiselect de faixas.
+    Vazio se o subgrupo não está no arquivo oficial.
+    """
+    df = _tabela_faixas(caminho)
+    sub = df[df["subgrupo_n"] == norm(subgrupo)].dropna(subset=["de", "ate"])
+    return (sub[["grupo", "faixa", "de", "ate", "moq"]]
+            .sort_values(["grupo", "de"]).reset_index(drop=True))
+
+
 # --------------------------------------------------------------------------- #
 # Aplicação em DataFrame
 # --------------------------------------------------------------------------- #

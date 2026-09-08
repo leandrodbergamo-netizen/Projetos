@@ -519,13 +519,21 @@ with tab_cd:
                 value=config.RESERVA_CD_PADRAO,
                 help="Peças mantidas no CD por SKU (e-commerce/atacado). "
                      "0 = distribuir tudo.")
+            _lojas_cd = sorted(dados["estoque_loja"]["loja"].dropna().unique())
+            _cfg_nr_cd = {config.norm_loja(x) for x in config.LOJAS_NAO_RECEBEM}
+            nao_recebem_cd = st.multiselect(
+                "Exceções: lojas que NÃO recebem do CD", _lojas_cd,
+                default=[l for l in _lojas_cd if config.norm_loja(l) in _cfg_nr_cd],
+                key="nr_cd",
+                help="Vale só para o abastecimento a partir do CD. O remanejamento "
+                     "entre lojas usa a lista da aba Sugestões.")
     chips_cd = (f'<span class="chip">Reserva CD<b>{reserva_cd} pç/SKU</b></span>'
                 f'<span class="chip">Janela<b>{janela} dias</b></span>')
-    if nao_recebem:
-        chips_cd += f'<span class="chip">Não recebem<b>{len(nao_recebem)}</b></span>'
+    if nao_recebem_cd:
+        chips_cd += f'<span class="chip">Não recebem<b>{len(nao_recebem_cd)}</b></span>'
     ca_chips.markdown(f'<div class="chips">{chips_cd}</div>', unsafe_allow_html=True)
 
-    ab = _abastecimento(hoje.isoformat(), janela, int(reserva_cd), tuple(nao_recebem))
+    ab = _abastecimento(hoje.isoformat(), janela, int(reserva_cd), tuple(nao_recebem_cd))
     nec_cd, abast, sobra_cd = ab["necessidades_cd"], ab["abastecimento"], ab["sobra_cd"]
 
     a1, a2, a3, a4 = st.columns(4)

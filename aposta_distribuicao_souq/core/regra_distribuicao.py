@@ -189,6 +189,39 @@ def arredondar_maior_resto(valores: Dict[str, float], total_alvo: Optional[int] 
 
 
 # --------------------------------------------------------------------------- #
+# Linha do CD na matriz (usada pela UI e pelo import da planilha-mãe)
+# --------------------------------------------------------------------------- #
+CD_ROTULO = "CD (reserva / reposição)"
+
+
+def cd_por_tamanho(
+    aposta_final: float,
+    distribuido: Dict[str, int],
+    curva_tamanhos: Optional[Dict[str, float]],
+) -> Dict[str, int]:
+    """Abre o saldo do CD por tamanho.
+
+    Alvo da compra por tamanho (curva × aposta final) menos o já `distribuido`
+    nas lojas, preservando o total: o déficit de um tamanho (lojas acima do
+    alvo) é drenado do tamanho com maior sobra. Tamanhos com peso 0 na curva
+    ficam de fora.
+    """
+    curva_n = normalizar_curva({t: p for t, p in (curva_tamanhos or {}).items() if p > 0})
+    if not curva_n:
+        return {}
+    alvo = arredondar_maior_resto({t: aposta_final * p for t, p in curva_n.items()},
+                                  int(round(aposta_final)))
+    cd = {t: int(alvo.get(t, 0)) - int(distribuido.get(t, 0)) for t in alvo}
+    deficit = -sum(v for v in cd.values() if v < 0)
+    cd = {t: max(v, 0) for t, v in cd.items()}
+    while deficit > 0 and any(v > 0 for v in cd.values()):
+        t_max = max(cd, key=cd.get)
+        cd[t_max] -= 1
+        deficit -= 1
+    return cd
+
+
+# --------------------------------------------------------------------------- #
 # Pipeline completo -> matriz loja x tamanho
 # --------------------------------------------------------------------------- #
 @dataclass
