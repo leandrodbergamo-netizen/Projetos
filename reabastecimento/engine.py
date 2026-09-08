@@ -101,7 +101,8 @@ def _pais_elegiveis_abastecimento(dados: dict[str, pd.DataFrame]) -> set | None:
 def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
                  janela_dias: int = config.JANELA_VENDAS_DIAS,
                  curva=None, excluir=None, gate_cd: str = "sem",
-                 exigir_carrega_pai: bool = True) -> pd.DataFrame:
+                 exigir_carrega_pai: bool = True,
+                 horizonte_sem: int = config.COBERTURA_HORIZONTE_SEMANAS) -> pd.DataFrame:
     """Rupturas candidatas a receber peças.
 
     `excluir`: lojas que não recebem (default config.LOJAS_NAO_RECEBEM).
@@ -193,7 +194,8 @@ def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
 
     # Cobertura + previsão sazonal por (loja, sku_pai) e combinação com a venda.
     pares = cand[["loja", "sku_pai"]].drop_duplicates()
-    cob = cobertura.cobertura_receptoras(pares, produtos, estoque_loja, vendas, hoje, curva=curva)
+    cob = cobertura.cobertura_receptoras(pares, produtos, estoque_loja, vendas, hoje,
+                                         horizonte=horizonte_sem, curva=curva)
     cand = cand.merge(cob[["loja", "sku_pai", "n_tam", "prev_horizonte", "cobertura_pai"]],
                       on=["loja", "sku_pai"], how="left")
     cand["prev_horizonte"] = cand["prev_horizonte"].fillna(0.0)
@@ -390,18 +392,21 @@ def gerar_abastecimento(nec_cd: pd.DataFrame, estoque_cd: pd.DataFrame,
 def calcular_abastecimento(dados: dict[str, pd.DataFrame], hoje: date,
                            janela_dias: int = config.JANELA_VENDAS_DIAS,
                            reserva: int = config.RESERVA_CD_PADRAO,
-                           nao_recebem=None) -> dict[str, pd.DataFrame]:
+                           nao_recebem=None,
+                           horizonte_sem: int = config.COBERTURA_HORIZONTE_SEMANAS
+                           ) -> dict[str, pd.DataFrame]:
     """Fluxo do abastecimento CD → lojas.
 
     Necessidades = mesmo funil do remanejamento com o gate invertido (só SKUs
     que o CD tem) e sem exigir carrega-o-pai (CD pode introduzir). Devolve
-    também a sobra por SKU no CD após a distribuição."""
+    também a sobra por SKU no CD após a distribuição. `horizonte_sem` =
+    semanas de venda prevista que o envio deve cobrir (qtd sugerida e score)."""
     curva = dados.get("curva")
     if curva is None:
         curva = sazonalidade.carregar_curva()
     nec_cd = necessidades(dados, hoje, janela_dias=janela_dias, curva=curva,
                           excluir=nao_recebem, gate_cd="com",
-                          exigir_carrega_pai=False)
+                          exigir_carrega_pai=False, horizonte_sem=horizonte_sem)
     abast = gerar_abastecimento(nec_cd, dados["estoque_cd"], reserva=reserva)
 
     enviado = (abast.groupby("sku_filho")["qtd"].sum()

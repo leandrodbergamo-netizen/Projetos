@@ -181,10 +181,11 @@ def _cobertura(hoje_iso: str):
 
 
 @st.cache_data(show_spinner="Calculando abastecimento...")
-def _abastecimento(hoje_iso: str, janela: int, reserva: int, nao_recebem: tuple = ()):
+def _abastecimento(hoje_iso: str, janela: int, reserva: int, nao_recebem: tuple = (),
+                   horizonte: int = config.COBERTURA_HORIZONTE_SEMANAS):
     return engine.calcular_abastecimento(
         _carregar(hoje_iso), config.data_referencia(), janela_dias=janela,
-        reserva=reserva, nao_recebem=set(nao_recebem))
+        reserva=reserva, nao_recebem=set(nao_recebem), horizonte_sem=horizonte)
 
 
 @st.cache_data(show_spinner="Calculando alertas...")
@@ -519,6 +520,12 @@ with tab_cd:
                 value=config.RESERVA_CD_PADRAO,
                 help="Peças mantidas no CD por SKU (e-commerce/atacado). "
                      "0 = distribuir tudo.")
+            horizonte_cd = st.number_input(
+                "Horizonte de cobertura (semanas)", min_value=1, max_value=12,
+                value=config.COBERTURA_HORIZONTE_SEMANAS,
+                help="Semanas de venda prevista que o envio deve cobrir. Define "
+                     "a quantidade sugerida por tamanho (previsão do horizonte ÷ "
+                     "nº de tamanhos, limitada pelo grupo) e entra no score.")
             _lojas_cd = sorted(dados["estoque_loja"]["loja"].dropna().unique())
             _cfg_nr_cd = {config.norm_loja(x) for x in config.LOJAS_NAO_RECEBEM}
             nao_recebem_cd = st.multiselect(
@@ -528,12 +535,14 @@ with tab_cd:
                 help="Vale só para o abastecimento a partir do CD. O remanejamento "
                      "entre lojas usa a lista da aba Sugestões.")
     chips_cd = (f'<span class="chip">Reserva CD<b>{reserva_cd} pç/SKU</b></span>'
-                f'<span class="chip">Janela<b>{janela} dias</b></span>')
+                f'<span class="chip">Janela<b>{janela} dias</b></span>'
+                f'<span class="chip">Cobertura alvo<b>{horizonte_cd} sem</b></span>')
     if nao_recebem_cd:
         chips_cd += f'<span class="chip">Não recebem<b>{len(nao_recebem_cd)}</b></span>'
     ca_chips.markdown(f'<div class="chips">{chips_cd}</div>', unsafe_allow_html=True)
 
-    ab = _abastecimento(hoje.isoformat(), janela, int(reserva_cd), tuple(nao_recebem_cd))
+    ab = _abastecimento(hoje.isoformat(), janela, int(reserva_cd),
+                        tuple(nao_recebem_cd), int(horizonte_cd))
     nec_cd, abast, sobra_cd = ab["necessidades_cd"], ab["abastecimento"], ab["sobra_cd"]
 
     a1, a2, a3, a4 = st.columns(4)
