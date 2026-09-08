@@ -155,7 +155,7 @@ st.markdown(
 # Versão dos dados: entra na chave de TODAS as funções cacheadas. Incrementar
 # quando uma republicação muda os dados de forma incompatível (novas tabelas,
 # exclusões) — força recarga sem depender de Reboot do app na nuvem.
-VERSAO_DADOS = 6
+VERSAO_DADOS = 7
 _chave_dados = f"{hoje.isoformat()}·v{VERSAO_DADOS}"
 
 

@@ -239,6 +239,23 @@ def _build_excel(hoje: date) -> dict[str, pd.DataFrame]:
     snapshot.gravar_snapshot(snap, hoje)
     receb_hist = snapshot.recebimento_estimado()
 
+    # --- Dias com estoque na janela de velocidade (efeito-ruptura) --------
+    # Publicados para a NUVEM aplicar a mesma correção do cálculo local:
+    # velocidade = vendas ÷ dias COM estoque (não a janela de calendário).
+    # Vazios quando o histórico ainda não tem dias suficientes na janela.
+    hist = snapshot.carregar_hist()
+    corte_h = pd.Timestamp(hoje) - pd.Timedelta(weeks=config.COBERTURA_SEMANAS_HIST)
+    hw = hist[hist["data"] >= corte_h] if not hist.empty else hist
+    if not hw.empty and hw["data"].nunique() >= config.COBERTURA_MIN_DIAS_HIST:
+        dias_disp_filho = (hw.groupby(["loja", "sku_filho"])["data"].nunique()
+                           .rename("dias").reset_index())
+        hp = hw.merge(produtos[["sku_filho", "sku_pai"]], on="sku_filho", how="inner")
+        dias_disp_pai = (hp.groupby(["loja", "sku_pai"])["data"].nunique()
+                         .rename("dias").reset_index())
+    else:
+        dias_disp_filho = pd.DataFrame(columns=["loja", "sku_filho", "dias"])
+        dias_disp_pai = pd.DataFrame(columns=["loja", "sku_pai", "dias"])
+
     # Prioriza o histórico salvo; completa com dt_envio+leadtime.
     if not receb_hist.empty:
         recebimento = pd.concat([receb_hist, receb_envio]).drop_duplicates(
@@ -257,6 +274,8 @@ def _build_excel(hoje: date) -> dict[str, pd.DataFrame]:
         "estoque_amplo": estoque_amplo,
         "pais_com_venda": pais_com_venda,
         "vendas_hist": vendas_hist,
+        "dias_disp_pai": dias_disp_pai,
+        "dias_disp_filho": dias_disp_filho,
     }
 
 
@@ -386,7 +405,8 @@ TABELAS = ["produtos", "estoque_loja", "estoque_cd", "transito",
            "vendas", "recebimento", "skus_permitidos"]
 # Tabelas novas (podem ainda não existir na nuvem antes da republicação):
 # lidas com tolerância a ausência; consumidores tratam None.
-TABELAS_NOVAS = ["pais_com_venda", "estoque_amplo", "vendas_hist"]
+TABELAS_NOVAS = ["pais_com_venda", "estoque_amplo", "vendas_hist",
+                 "dias_disp_pai", "dias_disp_filho"]
 
 
 def _segredo(nome: str) -> str:

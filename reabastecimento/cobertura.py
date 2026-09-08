@@ -23,12 +23,18 @@ def _moda(s: pd.Series):
 
 
 def _semanas_disponiveis(pares: pd.DataFrame, produtos: pd.DataFrame, hoje: date,
-                         semanas_hist: int):
+                         semanas_hist: int, dias_pai: pd.DataFrame | None = None):
     """Dias COM estoque por (loja, sku_pai) na janela, a partir do histórico.
 
     Retorna (dict[(loja, sku_pai)] -> dias, usar_hist). usar_hist só é True quando
     o histórico tem dias suficientes na janela (COBERTURA_MIN_DIAS_HIST).
+    `dias_pai` (tabela publicada dias_disp_pai) tem precedência: é como a NUVEM
+    aplica a mesma correção sem o parquet local; vazia/None -> snapshot local.
     """
+    if dias_pai is not None and len(dias_pai):
+        av = {(l, p): d for l, p, d in
+              dias_pai[["loja", "sku_pai", "dias"]].itertuples(index=False)}
+        return av, True
     hist = snapshot.carregar_hist()
     if hist.empty:
         return {}, False
@@ -64,7 +70,8 @@ def cobertura_receptoras(pares: pd.DataFrame, produtos: pd.DataFrame,
                          estoque_loja: pd.DataFrame, vendas: pd.DataFrame, hoje: date,
                          semanas_hist: int = config.COBERTURA_SEMANAS_HIST,
                          horizonte: int = config.COBERTURA_HORIZONTE_SEMANAS,
-                         curva: pd.DataFrame | None = None) -> pd.DataFrame:
+                         curva: pd.DataFrame | None = None,
+                         dias_pai: pd.DataFrame | None = None) -> pd.DataFrame:
     """pares: DataFrame único de (loja, sku_pai). Retorna previsão e cobertura."""
     curva = curva if curva is not None else sazonalidade.carregar_curva()
     seg = segmento_por_pai(produtos)
@@ -80,7 +87,8 @@ def cobertura_receptoras(pares: pd.DataFrame, produtos: pd.DataFrame,
 
     # Semanas efetivas para a velocidade: dias COM estoque (histórico), quando
     # houver histórico maduro; senão, a janela de calendário (sem efeito ruptura).
-    avail, usar_hist = _semanas_disponiveis(pares, produtos, hoje, semanas_hist)
+    avail, usar_hist = _semanas_disponiveis(pares, produtos, hoje, semanas_hist,
+                                            dias_pai=dias_pai)
 
     def _semanas_eff(loja, sku_pai) -> float:
         if usar_hist:

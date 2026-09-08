@@ -98,14 +98,20 @@ def _pais_elegiveis_abastecimento(dados: dict[str, pd.DataFrame]) -> set | None:
     return tem_envio & (com_estoque | com_venda)
 
 
-def _pesos_tamanho(dados: dict[str, pd.DataFrame], pares: pd.DataFrame) -> pd.DataFrame:
+def _pesos_tamanho(dados: dict[str, pd.DataFrame], pares: pd.DataFrame,
+                   hoje: date) -> pd.DataFrame:
     """Peso de cada tamanho dentro do pai, por loja receptora (abastecimento).
 
-    Abre a previsão do PAI por tamanho pela participação de venda (ano
-    corrente), com cascata conforme a amostra disponível: loja×pai ->
-    rede×pai -> loja×subgrupo (perfil de tamanho da loja na categoria) ->
-    rede×subgrupo -> uniforme. Piso de TAMANHO_PISO/n por tamanho
-    (renormalizado) evita zerar um tamanho por amostra esparsa.
+    Abre a previsão do PAI por tamanho pela DEMANDA do tamanho, com cascata
+    conforme a amostra disponível:
+      1. loja×pai/dia e 2. rede×pai/dia — taxa de venda POR DIA COM ESTOQUE
+         do tamanho na janela de velocidade (corrige o efeito-ruptura: tamanho
+         zerado não parece impopular); exigem a tabela dias_disp_filho;
+      3. loja×pai e 4. rede×pai — participação de venda do ano (sem correção);
+      5. loja×subgrupo (perfil de tamanho da loja na categoria);
+      6. rede×subgrupo; 7. uniforme.
+    Piso de TAMANHO_PISO/n por tamanho (renormalizado) evita zerar um tamanho
+    por amostra esparsa.
 
     pares: DataFrame com colunas loja e sku_pai.
     Retorna: loja, sku_pai, sku_filho, peso_tam (soma 1 por loja×pai), base_tam.
@@ -127,6 +133,20 @@ def _pesos_tamanho(dados: dict[str, pd.DataFrame], pares: pd.DataFrame) -> pd.Da
     rs = v.groupby(["subgrupo", "tamanho"])["qtd"].sum().to_dict()
     rs_tot = v.groupby("subgrupo")["qtd"].sum().to_dict()
 
+    # Taxa por dia disponível (janela de velocidade), quando há histórico.
+    ddf = dados.get("dias_disp_filho")
+    tem_dias = ddf is not None and len(ddf)
+    if tem_dias:
+        dias_lf = {(l, f): d for l, f, d in
+                   ddf[["loja", "sku_filho", "dias"]].itertuples(index=False)}
+        dias_rf = ddf.groupby("sku_filho")["dias"].sum().to_dict()
+        corte = pd.Timestamp(hoje) - pd.Timedelta(weeks=config.COBERTURA_SEMANAS_HIST)
+        vj = v[v["data"] >= corte]
+        lpj = vj.groupby(["loja", "sku_pai", "sku_filho"])["qtd"].sum().to_dict()
+        lpj_tot = vj.groupby(["loja", "sku_pai"])["qtd"].sum().to_dict()
+        rpj = vj.groupby(["sku_pai", "sku_filho"])["qtd"].sum().to_dict()
+        rpj_tot = vj.groupby("sku_pai")["qtd"].sum().to_dict()
+
     linhas = []
     for loja, pai in pares[["loja", "sku_pai"]].drop_duplicates().itertuples(index=False):
         filhos = grade_por_pai.get(pai, [])
@@ -134,7 +154,15 @@ def _pesos_tamanho(dados: dict[str, pd.DataFrame], pares: pd.DataFrame) -> pd.Da
         if n == 0:
             continue
         sub = filhos[0][2]
-        if lp_tot.get((loja, pai), 0) >= config.TAMANHO_MIN_PECAS_PAI:
+        if tem_dias and lpj_tot.get((loja, pai), 0) >= config.TAMANHO_MIN_PECAS_PAI:
+            base = "loja×pai/dia"
+            shares = {f: float(lpj.get((loja, pai, f), 0)) / max(dias_lf.get((loja, f), 0), 1)
+                      for f, _, _ in filhos}
+        elif tem_dias and rpj_tot.get(pai, 0) >= config.TAMANHO_MIN_PECAS_PAI:
+            base = "rede×pai/dia"
+            shares = {f: float(rpj.get((pai, f), 0)) / max(dias_rf.get(f, 0), 1)
+                      for f, _, _ in filhos}
+        elif lp_tot.get((loja, pai), 0) >= config.TAMANHO_MIN_PECAS_PAI:
             base = "loja×pai"
             shares = {f: float(lp.get((loja, pai, f), 0)) for f, _, _ in filhos}
         elif rp_tot.get(pai, 0) >= config.TAMANHO_MIN_PECAS_PAI:
@@ -269,7 +297,8 @@ def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
     # Cobertura + previsão sazonal por (loja, sku_pai) e combinação com a venda.
     pares = cand[["loja", "sku_pai"]].drop_duplicates()
     cob = cobertura.cobertura_receptoras(pares, produtos, estoque_loja, vendas, hoje,
-                                         horizonte=horizonte_sem, curva=curva)
+                                         horizonte=horizonte_sem, curva=curva,
+                                         dias_pai=dados.get("dias_disp_pai"))
     cand = cand.merge(cob[["loja", "sku_pai", "n_tam", "prev_horizonte", "cobertura_pai"]],
                       on=["loja", "sku_pai"], how="left")
     cand["prev_horizonte"] = cand["prev_horizonte"].fillna(0.0)
@@ -282,7 +311,7 @@ def necessidades(dados: dict[str, pd.DataFrame], hoje: date,
         # Previsão do TAMANHO = previsão do pai × participação de venda do
         # tamanho (cascata por amostra: loja×pai -> rede×pai -> loja×subgrupo
         # -> rede×subgrupo -> uniforme) — evita repor o tamanho errado.
-        pesos = _pesos_tamanho(dados, cand[["loja", "sku_pai"]].drop_duplicates())
+        pesos = _pesos_tamanho(dados, cand[["loja", "sku_pai"]].drop_duplicates(), hoje)
         cand = cand.merge(pesos, on=["loja", "sku_pai", "sku_filho"], how="left")
         cand["peso_tam"] = cand["peso_tam"].fillna(1.0 / cand["n_tam"].clip(lower=1))
         cand["base_tam"] = cand["base_tam"].fillna("uniforme")
@@ -659,7 +688,8 @@ def cobertura_sortimento(dados: dict[str, pd.DataFrame], hoje: date,
     pares = (estoque_loja.merge(produtos[["sku_filho", "sku_pai"]], on="sku_filho", how="left")
              [["loja", "sku_pai"]].dropna().drop_duplicates())
     cob = cobertura.cobertura_receptoras(pares, produtos, estoque_loja,
-                                         dados["vendas"], hoje, curva=curva)
+                                         dados["vendas"], hoje, curva=curva,
+                                         dias_pai=dados.get("dias_disp_pai"))
     cob["prev_sem"] = cob["prev_horizonte"] / config.COBERTURA_HORIZONTE_SEMANAS
     cob["cobertura_sem"] = cob["estoque_pai"] / cob["prev_sem"].where(cob["prev_sem"] > 0)
     return cob[["loja", "sku_pai", "estoque_pai", "prev_sem", "cobertura_sem"]]
