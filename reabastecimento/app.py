@@ -369,13 +369,16 @@ FILTROS_DIM = [("linha", "Linha"), ("grupo", "Grupo"), ("subgrupo", "Subgrupo"),
 
 _pop = st.popover if hasattr(st, "popover") else st.expander
 
-tab_sug, tab_cd, tab_rup, tab_ve, tab_alertas = st.tabs(
-    ["Sugestões", "Abastecimento CD", "Ruptura e Cobertura", "Vendas × Estoque",
-     "Alertas"])
+# Ordem de EXIBIÇÃO das abas (CD primeiro). Os blocos `with` abaixo seguem na
+# ordem de EXECUÇÃO original — a aba de transferência define janela/não
+# recebem, reusados pelas demais, e por isso precisa executar primeiro.
+tab_cd, tab_sug, tab_rup, tab_ve, tab_alertas = st.tabs(
+    ["Abastecimento CD", "Transferência entre Lojas", "Ruptura e Cobertura",
+     "Vendas × Estoque", "Alertas"])
 
 # ---------------------------------------------------------------------------
 with tab_sug:
-    st.markdown('<div class="pg-titulo">Sugestões de transferência</div>'
+    st.markdown('<div class="pg-titulo">Transferência entre lojas</div>'
                 '<div class="pg-sub">Lojas doadoras com peças paradas → '
                 'lojas receptoras com ruptura.</div>', unsafe_allow_html=True)
 
@@ -542,8 +545,8 @@ with tab_cd:
                 "Exceções: lojas que NÃO recebem do CD", _lojas_cd,
                 default=[l for l in _lojas_cd if config.norm_loja(l) in _cfg_nr_cd],
                 key="nr_cd",
-                help="Vale só para o abastecimento a partir do CD. O remanejamento "
-                     "entre lojas usa a lista da aba Sugestões.")
+                help="Vale só para o abastecimento a partir do CD. A transferência "
+                     "entre lojas usa a lista da aba Transferência entre Lojas.")
     chips_cd = (f'<span class="chip">Reserva CD<b>{reserva_cd} pç/SKU</b></span>'
                 f'<span class="chip">Janela<b>{janela} dias</b></span>'
                 f'<span class="chip">Cobertura alvo<b>{horizonte_cd} sem</b></span>')
