@@ -696,6 +696,29 @@ def cobertura_sortimento(dados: dict[str, pd.DataFrame], hoje: date,
     return cob[["loja", "sku_pai", "estoque_pai", "prev_sem", "cobertura_sem"]]
 
 
+def previsao_ecom(dados: dict[str, pd.DataFrame], hoje: date,
+                  curva=None) -> pd.DataFrame:
+    """Previsão SEMANAL de venda do canal e-com/atacado por SKU pai.
+
+    Mesmo pipeline das lojas (full price, dessazonalizada, reprojetada pela
+    curva + feriados), sobre a tabela vendas_ecom (nó CDES). Sem correção de
+    dias disponíveis (o estoque do canal é o CD). Tabela ausente/vazia
+    (nuvem não republicada) -> DataFrame vazio.
+    """
+    ve = dados.get("vendas_ecom")
+    if ve is None or ve.empty:
+        return pd.DataFrame(columns=["sku_pai", "prev_sem"])
+    if curva is None:
+        curva = dados.get("curva")
+    pares = ve[["loja", "sku_pai"]].drop_duplicates()
+    est_vazio = pd.DataFrame(columns=["loja", "sku_filho", "qtd"])
+    cob = cobertura.cobertura_receptoras(pares, dados["produtos"], est_vazio,
+                                         ve, hoje, curva=curva)
+    out = (cob.groupby("sku_pai")["prev_horizonte"].sum()
+           / config.COBERTURA_HORIZONTE_SEMANAS).rename("prev_sem").reset_index()
+    return out[out["prev_sem"] > 0]
+
+
 def cobertura_agregada(df: pd.DataFrame, cob: pd.DataFrame, por: str) -> pd.DataFrame:
     """Cobertura agregada por dimensão: soma de estoque ÷ soma de previsão semanal.
 

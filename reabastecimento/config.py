@@ -197,6 +197,10 @@ ARQS_VENDAS_FECHADOS = ARQS_VENDAS[:-1]
 # Se o item existir aqui (qtde>0), NÃO sugerimos transferência entre lojas.
 CD_LOCALIDADES_DISPONIVEIS = ["CDES Vendas SOUQ Atacado_Ecomm_Varejo"]
 
+# Nós de venda do canal e-com/atacado (Base_Vendas registra a venda neles).
+# Base da previsão e-com usada na "Cobertura total" (loja + CD + e-com).
+ECOM_LOCALIDADES = list(CD_LOCALIDADES_DISPONIVEIS)
+
 # Histórico diário de estoque (para tirar o efeito ruptura no cálculo de giro
 # e aproximar a data de recebimento). Acumulado em Parquet particionado por mês
 # (data/hist_estoque/AAAA-MM.parquet), gravando só linhas com qtde > 0.

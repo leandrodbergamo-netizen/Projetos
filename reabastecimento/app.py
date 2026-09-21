@@ -155,7 +155,7 @@ st.markdown(
 # Versão dos dados: entra na chave de TODAS as funções cacheadas. Incrementar
 # quando uma republicação muda os dados de forma incompatível (novas tabelas,
 # exclusões) — força recarga sem depender de Reboot do app na nuvem.
-VERSAO_DADOS = 8
+VERSAO_DADOS = 9
 _chave_dados = f"{hoje.isoformat()}·v{VERSAO_DADOS}"
 
 
@@ -203,6 +203,11 @@ def _alerta_cd(hoje_iso: str):
 @st.cache_data(show_spinner=False)
 def _st_base(hoje_iso: str):
     return engine.sell_through_por_sku(_carregar(hoje_iso))
+
+
+@st.cache_data(show_spinner=False)
+def _prev_ecom(hoje_iso: str):
+    return engine.previsao_ecom(_carregar(hoje_iso), config.data_referencia())
 
 
 dados = _carregar(_chave_dados)
@@ -713,13 +718,27 @@ with tab_rup:
         st_vendas = float(stb["vendas"].sum())
         st_total = st_vendas + float(stb["estoque"].sum())
         st_pct = 100.0 * st_vendas / st_total if st_total > 0 else float("nan")
-        m1, m2, m3, m4, m5 = st.columns(5)
+
+        # Cobertura total: soma o estoque do CD dos SKUs filtrados e a
+        # previsão e-com dos pais filtrados (canal 2 vende do CD).
+        est_lojas = float(cob_loja["estoque"].sum()) if not cob_loja.empty else 0.0
+        cd_f = dados["estoque_cd"]
+        cd_qtd = float(cd_f.loc[cd_f["sku_filho"].isin(set(rf["sku_filho"])), "qtd"].sum())
+        pe = _prev_ecom(_chave_dados)
+        prev_ecom = float(pe.loc[pe["sku_pai"].isin(set(rf["sku_pai"])), "prev_sem"].sum())
+        den_total = prev_tot + prev_ecom
+        cob_total = (est_lojas + cd_qtd) / den_total if den_total > 0 else float("nan")
+
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
         card(m1, "% Ruptura loja", _pct(p_loja), "estoque físico da loja")
         card(m2, "% Ruptura loja + trânsito", _pct(p_trans), "considerando peças a caminho")
         card(m3, "% Sold out CD", _pct(p_cd), "sem reposição disponível no CD")
-        card(m4, "Cobertura média", _sem(cob_geral),
-             "estoque ÷ venda semanal prevista (full price)")
-        card(m5, "% Sell Through", _pct(st_pct) if pd.notna(st_pct) else "—",
+        card(m4, "Cobertura loja", _sem(cob_geral),
+             "estoque loja ÷ venda semanal prevista (lojas)")
+        card(m5, "Cobertura total", _sem(cob_total),
+             f"+ CD ({_fmt(cd_qtd)} pç) e previsão e-com "
+             f"({_fmt(prev_ecom)} pç/sem)")
+        card(m6, "% Sell Through", _pct(st_pct) if pd.notna(st_pct) else "—",
              "vendas desde 2022 ÷ (vendas + estoque lojas e CD)")
         st.write("")
 

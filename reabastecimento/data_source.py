@@ -207,6 +207,24 @@ def _build_excel(hoje: date) -> dict[str, pd.DataFrame]:
                 "qtd_produto", "flag_liquidacao", "tipo_venda", "desc_nome"]
     ven = _ler_excel(config.ARQS_VENDAS[-1], "Base_Vendas", usecols=cols_ven)
     ven = ven[ven["tipo_venda"] == "venda"].copy()
+
+    # Vendas do canal e-com/atacado (nó CDES) — capturadas ANTES do casamento
+    # com lojas físicas, que as descartaria. Base da previsão da Cobertura total.
+    ecom_norm = {_norm(n) for n in config.ECOM_LOCALIDADES}
+    ve = ven[ven["desc_nome"].map(_norm).isin(ecom_norm)].dropna(
+        subset=["sk_produto", "cod_sku_pai"])
+    vendas_ecom = pd.DataFrame({
+        "loja": ve["desc_nome"].astype(str),
+        "sku_filho": ve["sk_produto"].astype("int64").astype(str),
+        "sku_pai": ve["cod_sku_pai"].astype(str),
+        "data": pd.to_datetime(ve["dt_transacao"]),
+        "qtd": pd.to_numeric(ve["qtd_produto"], errors="coerce").fillna(0),
+        "liquidacao": pd.to_numeric(ve["flag_liquidacao"], errors="coerce").fillna(0).astype(int),
+        "cupom": ve["cod_transacao"].astype(str),
+    })
+    vendas_ecom = vendas_ecom[(vendas_ecom["qtd"] > 0)
+                              & (~vendas_ecom["sku_filho"].isin(skus_excluidos))]
+
     ven["loja"] = ven["desc_nome"].map(lambda n: norm_para_nome.get(_norm(n)))
     ven = ven.dropna(subset=["loja", "cod_sku_pai"])
     vendas = pd.DataFrame({
@@ -276,6 +294,7 @@ def _build_excel(hoje: date) -> dict[str, pd.DataFrame]:
         "vendas_hist": vendas_hist,
         "dias_disp_pai": dias_disp_pai,
         "dias_disp_filho": dias_disp_filho,
+        "vendas_ecom": vendas_ecom,
     }
 
 
@@ -406,7 +425,7 @@ TABELAS = ["produtos", "estoque_loja", "estoque_cd", "transito",
 # Tabelas novas (podem ainda não existir na nuvem antes da republicação):
 # lidas com tolerância a ausência; consumidores tratam None.
 TABELAS_NOVAS = ["pais_com_venda", "estoque_amplo", "vendas_hist",
-                 "dias_disp_pai", "dias_disp_filho"]
+                 "dias_disp_pai", "dias_disp_filho", "vendas_ecom"]
 
 
 def _segredo(nome: str) -> str:
