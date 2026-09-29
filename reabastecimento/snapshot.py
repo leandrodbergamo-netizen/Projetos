@@ -81,13 +81,21 @@ def dias_disponiveis(hoje: date, dias: int) -> pd.DataFrame:
             .reset_index().rename(columns={"data": "dias_disp"}))
 
 
-def recebimento_estimado() -> pd.DataFrame:
-    """Data de recebimento = início da sequência ATUAL de dias com estoque.
+def recebimento_estimado(vendas: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Data da última ENTRADA de estoque por (loja, sku_filho).
 
-    Só reporta quando OBSERVAMOS a chegada (transição 0->>0) dentro do histórico;
-    se o item já estava em estoque no 1º dia gravado, fica desconhecido (fallback).
-    Requer >= 2 datas de histórico.
+    Entrada no intervalo entre duas fotos = Δestoque + vendas do intervalo
+    > 0: a venda revela a reposição que entra e sai deixando o estoque igual
+    (e também o reforço com estoque em mãos). Sem `vendas`, degenera na
+    detecção clássica da transição 0 -> >0. A data atribuída é a da 1ª foto
+    que reflete a entrada (a chegada ocorreu no intervalo anterior a ela).
+
+    Só reporta itens com estoque na foto mais recente; item presente desde a
+    1ª foto e sem entrada observada depois fica desconhecido (fallback
+    dt_envio + leadtime no data_source). Requer >= 2 datas de histórico.
     """
+    import numpy as np
+
     h = carregar_hist()
     cols = ["loja", "sku_filho", "data_recebimento"]
     if h.empty:
@@ -96,18 +104,33 @@ def recebimento_estimado() -> pd.DataFrame:
     if len(datas) < 2:
         return pd.DataFrame(columns=cols)
 
-    disp = (h.groupby(["loja", "sku_filho", "data"])["qtde"].sum() > 0)
-    pivot = disp.unstack("data", fill_value=False).reindex(columns=datas, fill_value=False)
+    qtd = (h.groupby(["loja", "sku_filho", "data"])["qtde"].sum()
+           .unstack("data", fill_value=0.0).reindex(columns=datas, fill_value=0.0))
+
+    # Vendas somadas por intervalo entre fotos. A foto é tirada de manhã:
+    # venda no MESMO dia da foto conta para o intervalo SEGUINTE (side=right).
+    v_int: dict = {}
+    if vendas is not None and not vendas.empty:
+        v = vendas[["loja", "sku_filho", "data", "qtd"]].copy()
+        idx = np.searchsorted(pd.DatetimeIndex(datas).values,
+                              v["data"].values, side="right")
+        ok = (idx > 0) & (idx < len(datas))
+        v, idx = v[ok], idx[ok]
+        v["i"] = idx
+        v_int = v.groupby(["loja", "sku_filho", "i"])["qtd"].sum().to_dict()
 
     registros = []
-    for (loja, sku), linha in pivot.iterrows():
-        v = list(linha.values)
-        if not v[-1]:
-            continue  # não está disponível hoje
-        ini = len(v) - 1
-        while ini - 1 >= 0 and v[ini - 1]:
-            ini -= 1
-        if ini == 0:
-            continue  # não observamos a chegada -> desconhecido
-        registros.append({"loja": loja, "sku_filho": sku, "data_recebimento": datas[ini]})
+    for (loja, sku), linha in qtd.iterrows():
+        vals = linha.values
+        if vals[-1] <= 0:
+            continue  # sem estoque na foto mais recente
+        achou = None
+        for i in range(len(vals) - 1, 0, -1):
+            entrada = vals[i] - vals[i - 1] + v_int.get((loja, sku, i), 0.0)
+            if entrada > 0:
+                achou = datas[i]
+                break
+        if achou is None:
+            continue  # presente desde a 1ª foto, sem entrada observada
+        registros.append({"loja": loja, "sku_filho": sku, "data_recebimento": achou})
     return pd.DataFrame(registros, columns=cols)

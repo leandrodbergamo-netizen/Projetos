@@ -255,7 +255,7 @@ def _build_excel(hoje: date) -> dict[str, pd.DataFrame]:
 
     snap = estoque_loja[["loja", "sku_filho", "qtd"]].rename(columns={"qtd": "qtde"})
     snapshot.gravar_snapshot(snap, hoje)
-    receb_hist = snapshot.recebimento_estimado()
+    receb_hist = snapshot.recebimento_estimado(vendas)
 
     # --- Dias com estoque na janela de velocidade (efeito-ruptura) --------
     # Publicados para a NUVEM aplicar a mesma correção do cálculo local:
