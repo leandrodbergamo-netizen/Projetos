@@ -345,6 +345,7 @@ SUG_RENOME = {"loja_doadora": "Loja doadora", "loja_receptora": "Loja receptora"
               "colecao": "Coleção", "status": "Status", "sku_pai": "SKU pai",
               "sku_filho": "SKU filho", "tamanho": "Tamanho", "qtd": "Qtd",
               "grade_quebrada": "Grade quebrada", "score_receptora": "Score",
+              "ultimo_recebimento": "Último recebimento",
               "dias_parado_doadora": "Pai parado (dias)"}
 ABAST_RENOME = {"loja_receptora": "Loja receptora", "linha": "Linha", "grupo": "Grupo",
                 "subgrupo": "Subgrupo", "colecao": "Coleção", "status": "Status",
@@ -457,6 +458,13 @@ with tab_sug:
         # lugar do sku_filho (o CSV/Excel mantém o SKU).
         exib = v.copy()
         exib["tamanho"] = _tamanho_de(v)
+        # Último recebimento do SKU filho NA DOADORA: início da sequência atual
+        # de estoque no histórico; fallback dt_envio + leadtime.
+        _rec = (dados["recebimento"].drop_duplicates(["loja", "sku_filho"])
+                .set_index(["loja", "sku_filho"])["data_recebimento"].to_dict())
+        exib["ultimo_recebimento"] = [
+            _rec.get((l, s), pd.NaT)
+            for l, s in zip(exib["loja_doadora"], exib["sku_filho"])]
         disp = pd.DataFrame({
             "Loja doadora": exib["loja_doadora"],
             "Loja receptora": "→ " + exib["loja_receptora"].astype(str),
@@ -468,14 +476,19 @@ with tab_sug:
             "Grade": exib["grade_quebrada"].map(
                 lambda s: "GRADE QUEBRADA" if s == "Sim" else ""),
             "Score": exib["score_receptora"].astype(float),
+            "Último receb.": exib["ultimo_recebimento"],
             "Pai parado (dias)": exib["dias_parado_doadora"].astype(int),
         })
         tabela = _tabela_html(
             disp, altura=400,
-            fmt={"Score": lambda x: f"{x:.1f}", "Qtd": lambda x: str(int(x))},
+            fmt={"Score": lambda x: f"{x:.1f}", "Qtd": lambda x: str(int(x)),
+                 "Último receb.": lambda d: ("—" if pd.isna(d)
+                                             else pd.Timestamp(d).strftime("%d/%m/%Y"))},
             css={
                 "Score": lambda _: f"color:{COR['acento']};font-weight:600;{_DIR}",
                 "Qtd": lambda _: _DIR,
+                "Último receb.": lambda d: (f"color:{COR['alerta']};{_DIR}"
+                                            if pd.isna(d) else _DIR),
                 "Pai parado (dias)": lambda x: (
                     f"color:{COR['alerta']};font-weight:600;{_DIR}" if x >= 60 else _DIR),
                 "Grade": lambda x: (f"color:{COR['alerta']};font-weight:700;"
