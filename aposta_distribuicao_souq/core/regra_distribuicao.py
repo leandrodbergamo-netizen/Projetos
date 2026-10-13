@@ -441,3 +441,53 @@ def participacao_com_loja_nova(
     if total <= 0:
         return {l: 1.0 / len(lojas_alvo) for l in lojas_alvo}
     return {l: p / total for l, p in resultado.items()}
+
+
+# --------------------------------------------------------------------------- #
+# Aceleração de venda por loja (Configurações)
+# --------------------------------------------------------------------------- #
+def fatores_aceleracao(aceleracao_pct: Optional[Dict] = None) -> Dict[str, float]:
+    """Converte a config `aceleracao_lojas` ({sk_localidade: %}) em fatores.
+
+    100 = neutro (a loja vende o que o histórico diz); 0 = a loja não vai
+    vender nada (sai do parque); 120 = cresce 20% em peças. Chave no formato
+    das participações ('484.0'). Valor inválido é ignorado; negativo vira 0.
+    """
+    saida: Dict[str, float] = {}
+    for loja, pct in (aceleracao_pct or {}).items():
+        try:
+            chave = str(float(loja))
+            fator = float(pct) / 100.0
+        except (TypeError, ValueError):
+            continue
+        saida[chave] = max(fator, 0.0)
+    return saida
+
+
+def lojas_com_aceleracao(lojas: List[str], fatores: Dict[str, float]) -> List[str]:
+    """Lojas-alvo que seguem no parque: quem está em 0% não vende nem recebe."""
+    return [l for l in lojas if fatores.get(l, 1.0) > 0]
+
+
+def lojas_equivalentes(lojas: List[str], fatores: Dict[str, float]) -> float:
+    """Nº de lojas-equivalentes do parque: Σ fator por loja (sem fator = 1).
+
+    É o multiplicador da venda física na projeção — 10 lojas a 120% valem 12
+    lojas de histórico; uma loja a 0% não conta.
+    """
+    return float(sum(fatores.get(l, 1.0) for l in lojas))
+
+
+def acelerar_participacao(participacoes: Dict[str, float],
+                          fatores: Dict[str, float]) -> Dict[str, float]:
+    """Pondera a participação de cada loja pelo fator de aceleração e renormaliza.
+
+    Loja em 0% sai do rateio. Sem fator configurado (ou tudo em 100%) o
+    resultado é idêntico à entrada renormalizada.
+    """
+    pesos = {l: p * fatores.get(l, 1.0) for l, p in participacoes.items()}
+    pesos = {l: p for l, p in pesos.items() if p > 0}
+    total = sum(pesos.values())
+    if total <= 0:
+        return {}
+    return {l: p / total for l, p in pesos.items()}

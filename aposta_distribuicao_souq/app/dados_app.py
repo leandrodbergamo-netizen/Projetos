@@ -15,7 +15,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from core import fonte
+from core import aceleracao, fonte
 from core.dados import (carregar_produtos, carregar_vendas, cluster_por_loja,
                         escopo_souq, lojas_alvo_souq, localidades_ecom)
 from core.espelho import preparar_produtos, preparar_vendas
@@ -93,6 +93,26 @@ def contexto_lojas() -> dict:
         "cluster_por_loja": cluster_por_loja(),
         "ecom_locs": localidades_ecom(),
     }
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def aceleracao_lojas() -> dict:
+    """{sk_localidade: %} da aceleração de venda por loja (só lojas fora de 100%).
+
+    Cacheado porque projeção e distribuição consultam a cada rerun; `salvar_aceleracao`
+    limpa o cache, então a edição na Auditoria vale na hora."""
+    return aceleracao.carregar()
+
+
+def invalidar_lojas() -> None:
+    """Após mudar lojas ativas/espelho em Configurações: refaz o contexto de lojas."""
+    contexto_lojas.clear()
+
+
+def salvar_aceleracao(valores: dict) -> dict:
+    gravado = aceleracao.salvar(valores)
+    aceleracao_lojas.clear()
+    return gravado
 
 
 def opcoes(coluna: str) -> list[str]:

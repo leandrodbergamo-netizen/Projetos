@@ -20,7 +20,7 @@ from core.dados import datas_liquidacao, rank_colecao
 from core.regra_distribuicao import reservar_cd
 from core.sazonalidade import fator_janela, semanas_equivalentes
 from core.taxonomia import (agrupar_cor, agrupar_material, agrupar_tamanho,
-                            faixa_preco_series, normalizar_subgrupo)
+                            faixa_preco_series, material_por_sku, normalizar_subgrupo)
 
 # Colunas exibidas na tabela de candidatos. Manga/comprimento/fit entram como
 # informação de CONSULTA (ajudam o comprador a escolher), não como filtro: o eta²
@@ -49,6 +49,12 @@ def preparar_produtos(produtos: pd.DataFrame, apenas_roupa: bool = True) -> pd.D
     if "desc_status_produto" in df.columns:
         df = df[df["desc_status_produto"].astype(str).str.upper() != "CANCELADO"]
     df["desc_sub_grupo_wbg"] = df["desc_sub_grupo_wbg"].map(normalizar_subgrupo)
+    # cadastro sem desc_material: completa com a composição do de-para por SKU
+    # (site/manual) ANTES da regra de tecido — o cadastro, quando existe, prevalece
+    depara = material_por_sku()
+    if depara and "desc_material" in df.columns:
+        sem = df["desc_material"].isna()
+        df.loc[sem, "desc_material"] = df.loc[sem, "cod_sku_pai"].astype(str).map(depara)
     df["grupo_material"] = [
         agrupar_material(g, m) for g, m in zip(df.get("desc_grupo_wgb"), df.get("desc_material"))
     ]
@@ -445,6 +451,8 @@ class ApostaProjetada:
     vel_por_loja_desaz: float      # média ponderada dos espelhos (físico, unid/loja/semana)
     vel_ecom_desaz: float          # média ponderada (Ecom)
     n_lojas_alvo: int
+    lojas_equivalentes: float      # Σ fator de aceleração das lojas (= n_lojas_alvo sem aceleração)
+    elasticidade: float            # crescimento aplicado sobre a venda (0.10 = +10%)
     semanas_equivalentes: float
     venda_projetada: float         # total (físico + ecom)
     venda_ecom: float
@@ -465,12 +473,19 @@ def projetar_aposta(
     aproveitamento: float = 0.70,
     reserva_cd_pct: float = 0.20,
     pesos: Optional[dict] = None,
+    lojas_equivalentes: Optional[float] = None,
+    elasticidade: float = 0.0,
 ) -> ApostaProjetada:
     """Dimensiona a aposta a partir dos espelhos selecionados.
 
-    venda_projetada = vel_por_loja_desaz(média) × n_lojas_alvo × semanas_equiv.
+    venda_projetada = vel_por_loja_desaz(média) × lojas_equivalentes × semanas_equiv.
     A extrapolação para lojas novas está no fator `n_lojas_alvo` (parque atual);
     a sazonalidade da janela de entrada, em `semanas_equivalentes`.
+    `lojas_equivalentes` (Σ fator de aceleração por loja, ver
+    `regra_distribuicao.lojas_equivalentes`) substitui `n_lojas_alvo` como
+    multiplicador da venda física quando informado: 10 lojas a 120% valem 12.
+    `elasticidade` (Configurações) multiplica a venda inteira — física e Ecom —
+    por (1 + elasticidade): crescimento esperado da marca sobre o histórico.
     """
     avisos: list[str] = []
     vs = [v for v in velocidades if v is not None]
@@ -482,17 +497,25 @@ def projetar_aposta(
     vel_eco = sum(v.vel_ecom_desaz * pesos.get(v.cod_sku_pai, 1.0) for v in vs) / tot_peso
 
     eqw = semanas_equivalentes(curva, dt_entrada, horizonte_semanas)
-    venda_ecom = vel_eco * eqw
-    venda = vel_fis * n_lojas_alvo * eqw + venda_ecom   # físico extrapolado + Ecom
+    lojas_eq = float(n_lojas_alvo if lojas_equivalentes is None else lojas_equivalentes)
+    cresc = 1.0 + float(elasticidade or 0.0)
+    venda_ecom = vel_eco * eqw * cresc
+    venda = vel_fis * lojas_eq * eqw * cresc + venda_ecom   # físico extrapolado + Ecom
     aposta = venda / aproveitamento if aproveitamento > 0 else venda
     reserva, disp = reservar_cd(aposta, reserva_cd_pct)
 
     if venda_ecom > 0:
         avisos.append(f"Inclui demanda de Ecom (~{venda_ecom:.0f} un) na aposta; Ecom não recebe na matriz física.")
+    if abs(lojas_eq - n_lojas_alvo) > 1e-9:
+        avisos.append(f"Aceleração de venda por loja (Auditoria): {n_lojas_alvo} lojas "
+                      f"valem {lojas_eq:.1f} lojas-equivalentes na venda física.")
+    if abs(cresc - 1.0) > 1e-9:
+        avisos.append(f"Elasticidade de crescimento (Configurações): {cresc - 1:+.0%} sobre a "
+                      "venda projetada pelos espelhos.")
 
     return ApostaProjetada(
         vel_por_loja_desaz=vel_fis, vel_ecom_desaz=vel_eco, n_lojas_alvo=n_lojas_alvo,
-        semanas_equivalentes=eqw, venda_projetada=venda, venda_ecom=venda_ecom,
+        lojas_equivalentes=lojas_eq, elasticidade=cresc - 1.0, semanas_equivalentes=eqw, venda_projetada=venda, venda_ecom=venda_ecom,
         aposta_sugerida=aposta, reserva_cd=reserva, disponivel_lojas=disp,
         espelhos=vs, avisos=avisos,
     )

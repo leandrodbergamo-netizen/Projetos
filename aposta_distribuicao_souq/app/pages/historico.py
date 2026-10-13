@@ -74,7 +74,7 @@ def _detalhes(payload: dict) -> None:
 def _importar(cen: pd.DataFrame, df_hist: pd.DataFrame) -> None:
     """Valida (all-or-nothing) e processa a planilha-mãe: rateia e grava cada
     cenário no Histórico (id vazio cria; preenchido atualiza)."""
-    from app.dados_app import contexto_lojas, produtos_prep, vendas_fp
+    from app.dados_app import aceleracao_lojas, contexto_lojas, produtos_prep, vendas_fp
 
     with st.spinner("Validando a planilha…"):
         pp = produtos_prep()
@@ -93,7 +93,8 @@ def _importar(cen: pd.DataFrame, df_hist: pd.DataFrame) -> None:
         return
 
     fp = vendas_fp()
-    cfg = {**load_config(), "ecom_locs": contexto_lojas()["ecom_locs"]}
+    cfg = {**load_config(), "ecom_locs": contexto_lojas()["ecom_locs"],
+           "aceleracao_lojas": aceleracao_lojas()}
     resumo_rows, falhas = [], 0
     prog = st.progress(0.0, text="Distribuindo cenários…")
     for i, linha in enumerate(linhas):

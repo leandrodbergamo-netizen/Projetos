@@ -12,9 +12,11 @@ import pandas as pd
 import streamlit as st
 
 from app import estilo
-from app.dados_app import (contexto_lojas, opcoes, opcoes_por_relevancia,
+from app.dados_app import (aceleracao_lojas, contexto_lojas, opcoes, opcoes_por_relevancia,
                            produtos_prep, totais_por_sku, vendas_fp)
 from core.config_utils import load_config
+from core.regra_distribuicao import (fatores_aceleracao, lojas_com_aceleracao,
+                                     lojas_equivalentes)
 from core.dados import (colecoes_projetaveis, fim_periodo_saudavel, lojas_alvo_souq,
                         opcoes_perfil_clima, participacao_lojas, semanas_ate)
 from core.espelho import (candidatos_espelho, curva_tamanhos_grade,
@@ -370,13 +372,22 @@ def _dimensionar(perfis=None, climas=None):
     Ecom entra integral (não é loja física). Retorna None se o parque é vazio."""
     base = st.session_state["projecao_base"]
     form = st.session_state["formulario"]
-    n = len(lojas_alvo_souq(perfis=perfis, climas=climas))
+    # aceleração de venda por loja (Auditoria): 0% tira a loja do parque;
+    # 120% faz a loja valer 1,2 loja de histórico na venda física
+    fatores = fatores_aceleracao(aceleracao_lojas())
+    lojas = [str(float(x)) for x in lojas_alvo_souq(perfis=perfis, climas=climas)["sk_localidade"]]
+    lojas = lojas_com_aceleracao(lojas, fatores)
+    n = len(lojas)
     if n == 0:
         return None
+    lojas_eq = lojas_equivalentes(lojas, fatores)
+    # elasticidade de crescimento (Configurações): multiplica a venda inteira
+    elasticidade = float(load_config().get("elasticidade_pct") or 0) / 100.0
     ap = projetar_aposta(base["vels"], base["curva"], pd.Timestamp(form["dt_entrada"]), n,
                          horizonte_semanas=base["horizonte"],
                          aproveitamento=form["aproveitamento_pct"] / 100.0,
-                         reserva_cd_pct=form["reserva_pct"] / 100.0)
+                         reserva_cd_pct=form["reserva_pct"] / 100.0,
+                         lojas_equivalentes=lojas_eq, elasticidade=elasticidade)
     fim = base["fim"]
     ref = f"{form['sku_ref']} · " if form.get("sku_ref") else ""
     projecao = {
@@ -385,7 +396,8 @@ def _dimensionar(perfis=None, climas=None):
                    f"{_rotulo_faixas(form.get('faixas'))} · {form['colecao']}"),
         "aposta_total": ap.aposta_sugerida,
         "aposta_final": ap.aposta_sugerida,
-        "parque": {"perfis": perfis, "climas": climas, "n_lojas_alvo": n},
+        "parque": {"perfis": perfis, "climas": climas, "n_lojas_alvo": n,
+                   "lojas_equivalentes": round(lojas_eq, 3)},
         "reserva_cd_pct": form["reserva_pct"] / 100.0,
         "participacoes_hist": base["participacoes"],
         "participacoes_espelhos": base["part_espelhos"],
@@ -406,6 +418,7 @@ def _dimensionar(perfis=None, climas=None):
             "faixas": form.get("faixas"), "dt_entrada": form["dt_entrada"],
             "colecao": form["colecao"], "aproveitamento": form["aproveitamento_pct"] / 100.0,
             "horizonte_semanas": base["horizonte"], "fim_periodo": f"{fim:%d/%m/%Y}",
+            "elasticidade": ap.elasticidade,
         },
         "resultado": {
             "venda_projetada": ap.venda_projetada, "venda_ecom": ap.venda_ecom,
@@ -459,12 +472,19 @@ def _etapa_projecao() -> None:
     k1, k2, k3, k4, k5 = st.columns(5)
     estilo.kpi(k1, "Aposta total", f"{res.get('aposta_sugerida', proj['aposta_total']):.0f}",
                "unidades", escuro=True)
-    estilo.kpi(k2, "Venda projetada", f"{res.get('venda_projetada', 0):.0f}",
-               f"{res.get('semanas_equivalentes', 0):.1f} semanas-equivalentes")
+    elast = float(ins.get("elasticidade") or 0)
+    sub_venda = f"{res.get('semanas_equivalentes', 0):.1f} semanas-equivalentes"
+    if abs(elast) > 1e-9:
+        sub_venda += f" · elasticidade {elast:+.0%}"
+    estilo.kpi(k2, "Venda projetada", f"{res.get('venda_projetada', 0):.0f}", sub_venda)
     estilo.kpi(k3, "Reserva CD", f"{res.get('reserva_cd', 0):.0f}",
                f"{100 * proj.get('reserva_cd_pct', 0):.0f}% da aposta")
-    estilo.kpi(k4, "Lojas-alvo", f"{parque.get('n_lojas_alvo') or '—'}",
-               "parque desta aposta")
+    n_alvo = parque.get("n_lojas_alvo")
+    lojas_eq = parque.get("lojas_equivalentes")
+    sub_lojas = "parque desta aposta"
+    if n_alvo and lojas_eq is not None and abs(float(lojas_eq) - n_alvo) > 1e-9:
+        sub_lojas = f"{float(lojas_eq):.1f} lojas-equivalentes (aceleração)"
+    estilo.kpi(k4, "Lojas-alvo", f"{n_alvo or '—'}", sub_lojas)
     estilo.kpi(k5, "Fim saudável", ins.get("fim_periodo") or "—",
                f"coleção {ins.get('colecao') or '—'}")
     st.markdown("")

@@ -21,7 +21,9 @@ import pandas as pd
 from core.dados import (cluster_por_loja, espelhos_loja_nova, lojas_alvo_souq,
                         participacao_lojas, rank_colecao)
 from core.espelho import curva_tamanhos_grade, pool_suavizacao
-from core.regra_distribuicao import (CD_ROTULO, cd_por_tamanho, distribuir,
+from core.regra_distribuicao import (CD_ROTULO, acelerar_participacao, cd_por_tamanho,
+                                     distribuir, fatores_aceleracao,
+                                     lojas_com_aceleracao, lojas_equivalentes,
                                      participacao_com_loja_nova)
 
 SEP = ";"
@@ -339,6 +341,11 @@ def montar_cenario(linha: dict, pp: pd.DataFrame, fp: pd.DataFrame, cfg: dict):
     if lojas_df.empty:
         raise ValueError("nenhuma loja ativa com o Perfil/Clima informado")
     lojas_alvo = [str(float(x)) for x in lojas_df["sk_localidade"]]
+    # aceleração de venda por loja (Auditoria; cfg["aceleracao_lojas"]): 0% tira a loja
+    fatores = fatores_aceleracao(cfg.get("aceleracao_lojas"))
+    lojas_alvo = lojas_com_aceleracao(lojas_alvo, fatores)
+    if not lojas_alvo:
+        raise ValueError("todas as lojas do parque estão com aceleração 0% (Auditoria)")
 
     ecom = set(cfg.get("ecom_locs") or set())
     fp_fis = fp[~fp["sk_localidade"].isin(ecom)] if ecom else fp
@@ -379,10 +386,10 @@ def montar_cenario(linha: dict, pp: pd.DataFrame, fp: pd.DataFrame, cfg: dict):
         else:
             curva, curva_origem = calc, calc_origem
 
-    part = participacao_com_loja_nova(
+    part = acelerar_participacao(participacao_com_loja_nova(
         part_hist, lojas_alvo, cluster_por_loja(),
         lojas_espelho=espelhos_loja_nova(),
-        com_dado_proprio=set(part_esp) if espelhos else None)
+        com_dado_proprio=set(part_esp) if espelhos else None), fatores)
     max_tam = linha.get("max_por_tamanho_loja") or int(cfg.get("max_por_tamanho_loja", 4))
     resultado = distribuir(
         aposta_total=float(linha["aposta_final"]),
@@ -415,7 +422,8 @@ def montar_cenario(linha: dict, pp: pd.DataFrame, fp: pd.DataFrame, cfg: dict):
                    f"{'/'.join(linha['faixas'])} · {linha['colecao']}"),
         "aposta_total": float(linha["aposta_final"]),
         "aposta_final": aposta_final,
-        "parque": {"perfis": perfis, "climas": climas, "n_lojas_alvo": len(lojas_alvo)},
+        "parque": {"perfis": perfis, "climas": climas, "n_lojas_alvo": len(lojas_alvo),
+                   "lojas_equivalentes": round(lojas_equivalentes(lojas_alvo, fatores), 3)},
         "reserva_cd_pct": linha["reserva_cd_pct"] / 100.0,
         "participacoes_hist": part_hist,
         "participacoes_espelhos": part_esp,

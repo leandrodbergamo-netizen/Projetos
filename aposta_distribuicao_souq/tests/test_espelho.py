@@ -332,6 +332,23 @@ class TestProjetarAposta:
         assert (reduzido.venda_projetada - reduzido.venda_ecom) == pytest.approx(
             (cheio.venda_projetada - cheio.venda_ecom) * 5 / 20)
 
+    def test_lojas_equivalentes_escalam_o_fisico_e_avisam(self):
+        # aceleração por loja: 20 lojas que valem 24 lojas-equivalentes (+20%)
+        reg = [("2024-01-03", 1, 10, "X"), ("2024-01-03", 456, 5, "X")]
+        ve = velocidade_por_loja_desaz(_vendas(reg), "X", CURVA_NEUTRA, ecom_locs={456})
+        base = projetar_aposta([ve], CURVA_NEUTRA, "2024-01-01", 20,
+                               horizonte_semanas=10, aproveitamento=1.0, reserva_cd_pct=0.0)
+        acel = projetar_aposta([ve], CURVA_NEUTRA, "2024-01-01", 20,
+                               horizonte_semanas=10, aproveitamento=1.0, reserva_cd_pct=0.0,
+                               lojas_equivalentes=24.0)
+        assert base.lojas_equivalentes == 20.0
+        assert acel.lojas_equivalentes == 24.0
+        assert acel.venda_ecom == base.venda_ecom == pytest.approx(50.0)   # Ecom não acelera
+        assert (acel.venda_projetada - acel.venda_ecom) == pytest.approx(
+            (base.venda_projetada - base.venda_ecom) * 1.2)
+        assert any("lojas-equivalentes" in a for a in acel.avisos)
+        assert not any("lojas-equivalentes" in a for a in base.avisos)
+
     def test_avisa_que_ecom_entra_na_aposta(self):
         reg = [("2024-01-03", 1, 10, "X"), ("2024-01-03", 456, 5, "X")]
         ve = velocidade_por_loja_desaz(_vendas(reg), "X", CURVA_NEUTRA, ecom_locs={456})

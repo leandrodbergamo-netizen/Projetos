@@ -143,3 +143,48 @@ def test_pipeline_com_teto_gera_sobra_para_cd():
     assert resultado.total_distribuido() <= 400
     assert resultado.sobra_para_cd > 0
     assert any("CD" in a for a in resultado.avisos)
+
+
+# --------------------------------------------------------------------------- #
+# Aceleração de venda por loja
+# --------------------------------------------------------------------------- #
+from core.regra_distribuicao import (acelerar_participacao, fatores_aceleracao,  # noqa: E402
+                                     lojas_com_aceleracao, lojas_equivalentes)
+
+
+class TestAceleracaoLojas:
+    def test_fatores_convertem_percentual_e_normalizam_chave(self):
+        f = fatores_aceleracao({"122.0": 120, 130: 0, "7": "80", "x": 50, "9": "abc", "5": -10})
+        assert f["122.0"] == pytest.approx(1.2)
+        assert f["130.0"] == 0.0
+        assert f["7.0"] == pytest.approx(0.8)
+        assert f["5.0"] == 0.0                 # negativo vira 0
+        assert "x" not in f and "9.0" not in f  # inválidos ignorados
+        assert fatores_aceleracao(None) == {}
+
+    def test_loja_em_zero_sai_do_parque(self):
+        f = fatores_aceleracao({"2.0": 0})
+        assert lojas_com_aceleracao(["1.0", "2.0", "3.0"], f) == ["1.0", "3.0"]
+
+    def test_lojas_equivalentes_soma_fatores_com_default_1(self):
+        f = fatores_aceleracao({"1.0": 120, "2.0": 0})
+        # 1.2 + 0 + 1 (sem fator) = 2.2
+        assert lojas_equivalentes(["1.0", "2.0", "3.0"], f) == pytest.approx(2.2)
+        assert lojas_equivalentes(["1.0", "3.0"], {}) == 2.0
+
+    def test_acelerar_participacao_pondera_e_renormaliza(self):
+        part = {"1.0": 0.5, "2.0": 0.3, "3.0": 0.2}
+        f = fatores_aceleracao({"1.0": 120, "3.0": 0})
+        out = acelerar_participacao(part, f)
+        assert "3.0" not in out                       # 0% sai do rateio
+        assert sum(out.values()) == pytest.approx(1.0)
+        # 0.6 : 0.3 => 2/3 : 1/3
+        assert out["1.0"] == pytest.approx(2 / 3)
+        assert out["2.0"] == pytest.approx(1 / 3)
+
+    def test_sem_fatores_e_identidade(self):
+        part = {"1.0": 0.5, "2.0": 0.5}
+        assert acelerar_participacao(part, {}) == pytest.approx(part)
+
+    def test_tudo_zero_devolve_vazio(self):
+        assert acelerar_participacao({"1.0": 1.0}, {"1.0": 0.0}) == {}

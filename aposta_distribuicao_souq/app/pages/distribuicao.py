@@ -12,11 +12,13 @@ import pandas as pd
 import streamlit as st
 
 from app import estilo
+from app.dados_app import aceleracao_lojas
 from core.config_utils import load_config
 from core.dados import (cluster_por_loja, espelhos_loja_nova, lojas_alvo_souq,
                         lojas_souq)
-from core.regra_distribuicao import (CD_ROTULO, cd_por_tamanho, distribuir,
-                                     participacao_com_loja_nova)
+from core.regra_distribuicao import (CD_ROTULO, acelerar_participacao, cd_por_tamanho,
+                                     distribuir, fatores_aceleracao,
+                                     lojas_com_aceleracao, participacao_com_loja_nova)
 
 
 def _cd_por_tamanho(aposta_final: float, lojas_matriz: pd.DataFrame, curva: dict) -> dict:
@@ -186,14 +188,34 @@ def secao(proj: dict, registro_id: str | None = None) -> None:
         st.warning("Nenhuma loja ativa com o Perfil/Clima salvo neste cenário.")
         return
 
-    lojas_alvo = [str(float(x)) for x in lojas_df["sk_localidade"]]
+    nomes_lj = {str(float(r["sk_localidade"])): r["desc_nome"] for _, r in lojas_df.iterrows()}
+    # aceleração de venda por loja (Auditoria): 0% tira a loja da matriz;
+    # os demais fatores ponderam a participação antes do rateio
+    fatores = fatores_aceleracao(aceleracao_lojas())
+    lojas_alvo = lojas_com_aceleracao(list(nomes_lj), fatores)
+    fora = [nomes_lj[l] for l in nomes_lj if l not in lojas_alvo]
+    lojas_df = lojas_df[lojas_df["sk_localidade"].astype(float).astype(str).isin(lojas_alvo)]
+    if not lojas_alvo:
+        st.warning("Todas as lojas do parque estão com aceleração 0% (Auditoria).")
+        return
     espelhos = espelhos_loja_nova()
     ldp = proj.get("lojas_com_espelho_proprio")
     com_dado = set(ldp) if ldp is not None else None
-    part = participacao_com_loja_nova(
+    part_base = participacao_com_loja_nova(
         proj["participacoes_hist"], lojas_alvo, cluster_por_loja(),
         lojas_espelho=espelhos, com_dado_proprio=com_dado)
+    part = acelerar_participacao(part_base, fatores)
     novas = [l for l in lojas_alvo if l not in proj["participacoes_hist"]]
+
+    acel = [f"{nomes_lj[l]} {fatores[l]:.0%}" for l in lojas_alvo
+            if abs(fatores.get(l, 1.0) - 1.0) > 1e-9]
+    if acel or fora:
+        partes = []
+        if acel:
+            partes.append("Aceleração por loja: " + " · ".join(acel))
+        if fora:
+            partes.append("Fora do parque (0%): " + " · ".join(fora))
+        st.caption(" — ".join(partes) + ".")
 
     # quais lojas estão usando a regra de loja espelho nesta distribuição
     usando_espelho = []
@@ -213,16 +235,18 @@ def secao(proj: dict, registro_id: str | None = None) -> None:
                    "modelos selecionados.")
         pe = proj.get("participacoes_espelhos") or {}
         ph = proj.get("participacoes_hist") or {}
-        nomes_lj = {str(float(r["sk_localidade"])): r["desc_nome"] for _, r in lojas_df.iterrows()}
         tab_part = pd.DataFrame({
             "Loja": [nomes_lj.get(l, l) for l in part],
             "% usada": [100 * part[l] for l in part],
             "% segmento": [100 * ph.get(l, 0) for l in part],
             "% espelhos": [100 * pe.get(l, 0) for l in part],
+            "Aceleração": [100 * fatores.get(l, 1.0) for l in part],
         }).sort_values("% usada", ascending=False)
+        col_cfg = {c: st.column_config.NumberColumn(c, format="%.1f%%")
+                   for c in ("% usada", "% segmento", "% espelhos")}
+        col_cfg["Aceleração"] = st.column_config.NumberColumn("Aceleração", format="%.0f%%")
         st.dataframe(tab_part, hide_index=True, width="stretch", height=380,
-                     column_config={c: st.column_config.NumberColumn(c, format="%.1f%%")
-                                    for c in tab_part.columns if c != "Loja"})
+                     column_config=col_cfg)
 
     m1, m2, m3 = st.columns(3)
     sugerida = float(proj["aposta_total"])
