@@ -14,8 +14,9 @@ from core.sazonalidade import curva_por, marcar_feriados
 
 def _curva() -> None:
     st.subheader("Curva sazonal semanal")
-    st.caption("Índice por semana ISO (100 = semana média), por loja ativa. É o que "
-               "desazonaliza os espelhos e re-sazonaliza a projeção.")
+    st.caption("Índice por semana ISO (100 = semana média), só com as lojas ativas hoje "
+               "(fechadas e desligadas ficam fora). É o que desazonaliza os espelhos e "
+               "re-sazonaliza a projeção.")
     pp, fp = produtos_prep(), vendas_fp()
 
     c1, c2 = st.columns(2)
@@ -55,7 +56,7 @@ def _cobertura() -> None:
 
     vendas_ano = fp.groupby(fp["dt_transacao"].dt.year)["qtd_produto"].sum()
     vendas_ano.index = vendas_ano.index.astype(int).astype(str)
-    st.caption("Unidades full price no escopo Souq, por ano:")
+    st.caption("Unidades full price das lojas ativas hoje (+ Ecom), por ano:")
     st.bar_chart(vendas_ano, height=180)
 
 

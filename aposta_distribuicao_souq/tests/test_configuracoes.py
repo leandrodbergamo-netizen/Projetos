@@ -40,6 +40,28 @@ class TestLojasAtivas:
         assert set(out["sk_localidade"]) == {484, 506}
 
 
+class TestHistoricoLojasAtivas:
+    def _vendas(self):
+        return pd.DataFrame({
+            "sk_localidade": [122, 484, 506, 120, 456, 999],
+            "qtd_produto": [1, 1, 1, 1, 1, 1],
+        })
+
+    def test_fechada_sai_do_historico_e_ecom_fica(self):
+        out = dados.filtrar_lojas_ativas(self._vendas(), cfg={})
+        assert set(out["sk_localidade"]) == {122, 484, 506, 456}   # 120 fechada, 999 fora da base
+
+    def test_inativa_na_config_sai_do_historico(self):
+        out = dados.filtrar_lojas_ativas(self._vendas(), cfg={"lojas_inativas": ["484.0"]})
+        assert set(out["sk_localidade"]) == {122, 506, 456}
+
+    def test_vazio_e_sem_coluna_passam_direto(self):
+        vazio = pd.DataFrame({"sk_localidade": [], "qtd_produto": []})
+        assert dados.filtrar_lojas_ativas(vazio, cfg={}).empty
+        sem_col = pd.DataFrame({"x": [1]})
+        assert dados.filtrar_lojas_ativas(sem_col, cfg={}).equals(sem_col)
+
+
 class TestLojasEspelho:
     def test_yaml_e_lido_quando_config_vazia(self):
         regras = dados.espelhos_loja_nova(cfg={})

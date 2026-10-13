@@ -296,6 +296,26 @@ def lojas_alvo_souq(
     return lj
 
 
+def filtrar_lojas_ativas(
+    vendas: pd.DataFrame,
+    caminho: Optional[str] = None,
+    cfg: Optional[dict] = None,
+    col_loja: str = "sk_localidade",
+) -> pd.DataFrame:
+    """Mantém só as vendas das lojas que estão no modelo hoje: físicas ativas
+    (sem `dt_fechamento` e não desligadas em Configurações) + Ecom.
+
+    É o histórico que alimenta velocidade dos espelhos, participação por loja e
+    curva sazonal — operação fechada ou desligada sai da conta inteira, para a
+    análise refletir o parque atual (decisão do negócio, 13/10/2026).
+    """
+    if vendas.empty or col_loja not in vendas.columns:
+        return vendas
+    ativas = {float(x) for x in lojas_alvo_souq(caminho, cfg=cfg)["sk_localidade"]}
+    locs = ativas | localidades_ecom(caminho)
+    return vendas[vendas[col_loja].astype(float).isin(locs)]
+
+
 def cluster_por_loja(caminho: Optional[str] = None) -> dict:
     """Mapa sk_localidade (str, ex '122.0') -> (Perfil Econômico, Clima).
 

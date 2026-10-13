@@ -17,7 +17,8 @@ import streamlit as st
 
 from core import aceleracao, fonte
 from core.dados import (carregar_produtos, carregar_vendas, cluster_por_loja,
-                        escopo_souq, lojas_alvo_souq, localidades_ecom)
+                        escopo_souq, filtrar_lojas_ativas, lojas_alvo_souq,
+                        localidades_ecom)
 from core.espelho import preparar_produtos, preparar_vendas
 
 ANOS = (2022, 2023, 2024, 2025, 2026)
@@ -56,10 +57,21 @@ def produtos_prep() -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner="Carregando vendas (2022–2026)...")
-def vendas_fp() -> pd.DataFrame:
+def _vendas_fp_todas() -> pd.DataFrame:
+    """Vendas full price do escopo Souq, TODAS as lojas (base publicada/cacheada)."""
     if fonte.usa_supabase():
         return fonte.ler_tabela("vendas")
     return construir_vendas(produtos_prep())
+
+
+def vendas_fp() -> pd.DataFrame:
+    """Histórico que o modelo usa: só lojas ativas hoje (+ Ecom).
+
+    Loja fechada na base ou desligada em Configurações sai da velocidade dos
+    espelhos, da participação por loja e da curva sazonal. O filtro é aplicado
+    a cada chamada (barato) para acompanhar a configuração sem limpar o cache.
+    """
+    return filtrar_lojas_ativas(_vendas_fp_todas())
 
 
 def construir_totais(produtos_preparados: pd.DataFrame) -> pd.DataFrame:

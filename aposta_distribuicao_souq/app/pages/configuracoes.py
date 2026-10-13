@@ -89,7 +89,9 @@ def _card_lojas(cfg: dict, padrao_cresc: int) -> tuple[list[str], dict, dict]:
     n_cresc = int((tab["Crescimento (%)"] != padrao_cresc).sum())
     st.caption(f"**{n_ativas}** lojas ativas de {len(tab)} abertas na base · {n_esp} com loja "
                f"espelho · {n_cresc} fora do crescimento padrão ({padrao_cresc:+d}%). "
-               "**Ativa** desmarcada tira a loja "
+               "**Ativa** desmarcada tira a loja do modelo inteiro, inclusive do "
+               "histórico que calcula velocidade, participação e curva sazonal (o mesmo "
+               "vale para loja fechada na base). "
                "do modelo. **Loja espelho**: enquanto a loja não tiver venda própria dos "
                "espelhos da aposta, recebe *% da loja espelho* × participação da loja indicada. "
                "**Crescimento**: % sobre a venda que a loja teria (própria ou via espelho); "
