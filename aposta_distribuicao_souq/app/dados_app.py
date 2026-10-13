@@ -49,14 +49,18 @@ def construir_vendas(produtos_preparados: pd.DataFrame) -> pd.DataFrame:
     return preparar_vendas(fp, produtos_preparados)
 
 
-@st.cache_data(show_spinner="Carregando cadastro de produtos...")
+# As bases grandes ficam em cache_resource (objeto compartilhado, SEM cópia a cada
+# rerun): com cache_data, cada chamada desserializava ~370k linhas (~160 ms) e o
+# filtro de lojas ativas somava mais ~360 ms por rerun. REGRA: nunca mutar os
+# DataFrames devolvidos por estas funções — derive com filtros/cópias.
+@st.cache_resource(show_spinner="Carregando cadastro de produtos...")
 def produtos_prep() -> pd.DataFrame:
     if fonte.usa_supabase():
         return fonte.ler_tabela("produtos")
     return construir_produtos()
 
 
-@st.cache_data(show_spinner="Carregando vendas (2022–2026)...")
+@st.cache_resource(show_spinner="Carregando vendas (2022–2026)...")
 def _vendas_fp_todas() -> pd.DataFrame:
     """Vendas full price do escopo Souq, TODAS as lojas (base publicada/cacheada)."""
     if fonte.usa_supabase():
@@ -64,14 +68,22 @@ def _vendas_fp_todas() -> pd.DataFrame:
     return construir_vendas(produtos_prep())
 
 
+@st.cache_resource(show_spinner=False)
+def _vendas_fp_ativas(chave_lojas: tuple) -> pd.DataFrame:
+    """Base filtrada pelas lojas ativas; uma entrada de cache por conjunto de lojas."""
+    return filtrar_lojas_ativas(_vendas_fp_todas())
+
+
 def vendas_fp() -> pd.DataFrame:
     """Histórico que o modelo usa: só lojas ativas hoje (+ Ecom).
 
     Loja fechada na base ou desligada em Configurações sai da velocidade dos
-    espelhos, da participação por loja e da curva sazonal. O filtro é aplicado
-    a cada chamada (barato) para acompanhar a configuração sem limpar o cache.
+    espelhos, da participação por loja e da curva sazonal. A chave do cache é o
+    conjunto de lojas ativas: mudou em Configurações, filtra de novo; senão o
+    rerun devolve o mesmo objeto sem custo.
     """
-    return filtrar_lojas_ativas(_vendas_fp_todas())
+    chave = tuple(sorted(str(float(x)) for x in lojas_alvo_souq()["sk_localidade"]))
+    return _vendas_fp_ativas(chave)
 
 
 def construir_totais(produtos_preparados: pd.DataFrame) -> pd.DataFrame:
@@ -174,6 +186,7 @@ def recarregar_bases() -> None:
         # um parquet por ano — mesmo nome que `_ler_ano` procura
         carregar_vendas([ano], forcar=True)
     st.cache_data.clear()
+    st.cache_resource.clear()
 
 
 def botao_recarregar(local: str = "sidebar") -> None:
