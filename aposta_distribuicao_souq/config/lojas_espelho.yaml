@@ -4,7 +4,7 @@
 # Nomes conforme desc_nome da base de lojas (comparação ignora maiúsculas).
 Souq Casa Jardins:
   espelho: Souq Sp Iguatemi Sao Paul
-  fator: 0.75
+  fator: 0.50
 Souq Natal Shopping:
   espelho: Souq Rio Mar Fortaleza
   fator: 0.50
