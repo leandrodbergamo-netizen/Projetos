@@ -372,7 +372,7 @@ def _dimensionar(perfis=None, climas=None):
     Ecom entra integral (não é loja física). Retorna None se o parque é vazio."""
     base = st.session_state["projecao_base"]
     form = st.session_state["formulario"]
-    # aceleração de venda por loja (Auditoria): 0% tira a loja do parque;
+    # crescimento por loja (Configurações): -100% tira a loja do parque;
     # 120% faz a loja valer 1,2 loja de histórico na venda física
     fatores = fatores_aceleracao(aceleracao_lojas())
     lojas = [str(float(x)) for x in lojas_alvo_souq(perfis=perfis, climas=climas)["sk_localidade"]]

@@ -507,7 +507,7 @@ def projetar_aposta(
     if venda_ecom > 0:
         avisos.append(f"Inclui demanda de Ecom (~{venda_ecom:.0f} un) na aposta; Ecom não recebe na matriz física.")
     if abs(lojas_eq - n_lojas_alvo) > 1e-9:
-        avisos.append(f"Aceleração de venda por loja (Auditoria): {n_lojas_alvo} lojas "
+        avisos.append(f"Crescimento por loja (Configurações): {n_lojas_alvo} lojas "
                       f"valem {lojas_eq:.1f} lojas-equivalentes na venda física.")
     if abs(cresc - 1.0) > 1e-9:
         avisos.append(f"Elasticidade de crescimento (Configurações): {cresc - 1:+.0%} sobre a "

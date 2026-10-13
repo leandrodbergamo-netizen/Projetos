@@ -189,14 +189,14 @@ def secao(proj: dict, registro_id: str | None = None) -> None:
         return
 
     nomes_lj = {str(float(r["sk_localidade"])): r["desc_nome"] for _, r in lojas_df.iterrows()}
-    # aceleração de venda por loja (Auditoria): 0% tira a loja da matriz;
+    # crescimento por loja (Configurações): -100% tira a loja da matriz;
     # os demais fatores ponderam a participação antes do rateio
     fatores = fatores_aceleracao(aceleracao_lojas())
     lojas_alvo = lojas_com_aceleracao(list(nomes_lj), fatores)
     fora = [nomes_lj[l] for l in nomes_lj if l not in lojas_alvo]
     lojas_df = lojas_df[lojas_df["sk_localidade"].astype(float).astype(str).isin(lojas_alvo)]
     if not lojas_alvo:
-        st.warning("Todas as lojas do parque estão com aceleração 0% (Auditoria).")
+        st.warning("Todas as lojas do parque estão com crescimento -100% (Configurações).")
         return
     espelhos = espelhos_loja_nova()
     ldp = proj.get("lojas_com_espelho_proprio")

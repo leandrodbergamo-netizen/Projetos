@@ -341,11 +341,11 @@ def montar_cenario(linha: dict, pp: pd.DataFrame, fp: pd.DataFrame, cfg: dict):
     if lojas_df.empty:
         raise ValueError("nenhuma loja ativa com o Perfil/Clima informado")
     lojas_alvo = [str(float(x)) for x in lojas_df["sk_localidade"]]
-    # aceleração de venda por loja (Auditoria; cfg["aceleracao_lojas"]): 0% tira a loja
+    # crescimento por loja (Configurações; cfg["aceleracao_lojas"]): -100% tira a loja
     fatores = fatores_aceleracao(cfg.get("aceleracao_lojas"))
     lojas_alvo = lojas_com_aceleracao(lojas_alvo, fatores)
     if not lojas_alvo:
-        raise ValueError("todas as lojas do parque estão com aceleração 0% (Auditoria)")
+        raise ValueError("todas as lojas do parque estão com crescimento -100% (Configurações)")
 
     ecom = set(cfg.get("ecom_locs") or set())
     fp_fis = fp[~fp["sk_localidade"].isin(ecom)] if ecom else fp

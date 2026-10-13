@@ -100,7 +100,7 @@ def aceleracao_lojas() -> dict:
     """{sk_localidade: %} da aceleração de venda por loja (só lojas fora de 100%).
 
     Cacheado porque projeção e distribuição consultam a cada rerun; `salvar_aceleracao`
-    limpa o cache, então a edição na Auditoria vale na hora."""
+    limpa o cache, então a edição em Configurações vale na hora."""
     return aceleracao.carregar()
 
 
