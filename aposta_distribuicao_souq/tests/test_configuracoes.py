@@ -44,7 +44,7 @@ class TestLojasEspelho:
     def test_yaml_e_lido_quando_config_vazia(self):
         regras = dados.espelhos_loja_nova(cfg={})
         assert regras["484.0"][0] == "122.0"
-        assert regras["484.0"][1] == pytest.approx(0.75)
+        assert regras["484.0"][1] == pytest.approx(0.50)
 
     def test_config_sobrepoe_fator_e_espelho(self):
         regras = dados.espelhos_loja_nova(cfg={"lojas_espelho": {
