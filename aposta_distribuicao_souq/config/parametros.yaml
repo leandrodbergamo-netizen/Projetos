@@ -20,3 +20,20 @@ desde_colecao: 2022.0
 # nos ultimos 60 dias). Quem parou antes disso saiu de circulacao sem registro:
 # a janela para na ultima venda, para nao diluir a velocidade em anos de prateleira.
 dias_para_considerar_ativo: 60
+
+# Elasticidade de crescimento (aba Configuracoes): % sobre a venda projetada
+# pelos espelhos, para toda aposta (0 = repete o historico; 10 = +10%).
+elasticidade_pct: 0
+
+# Parque de lojas (aba Configuracoes). lojas_inativas: sk desligadas no modelo
+# alem das fechadas na base; lojas_espelho: {sk_nova: {espelho: sk, fator: 0.75}}
+# sobrepoe config/lojas_espelho.yaml (espelho vazio = regra desligada).
+lojas_inativas: []
+lojas_espelho: {}
+
+# Aceleracao de venda por loja (aba Auditoria): {sk_localidade: %}.
+# 100 = igual ao historico (padrao, nao precisa constar); 0 = a loja nao vai
+# vender nada (sai do parque e da matriz); 120 = cresce 20% em pecas.
+# Com DATABASE_URL a configuracao fica no Supabase (aposta_aceleracao_lojas);
+# esta chave e so o fallback de maquina sem banco.
+aceleracao_lojas: {}

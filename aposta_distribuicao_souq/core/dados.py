@@ -257,19 +257,38 @@ def lojas_souq(caminho: Optional[str] = None, incluir_ecom: bool = True) -> pd.D
     return df
 
 
+def lojas_inativas_config(cfg: Optional[dict] = None) -> set:
+    """Lojas desligadas na aba Configurações (`lojas_inativas`), chaves '122.0'."""
+    from core.config_utils import load_config
+
+    cfg = load_config() if cfg is None else cfg
+    saida = set()
+    for x in cfg.get("lojas_inativas") or []:
+        try:
+            saida.add(str(float(x)))
+        except (TypeError, ValueError):
+            continue
+    return saida
+
+
 def lojas_alvo_souq(
     caminho: Optional[str] = None,
     perfis: Optional[Iterable[str]] = None,
     climas: Optional[Iterable[str]] = None,
+    cfg: Optional[dict] = None,
 ) -> pd.DataFrame:
-    """Lojas físicas Souq ativas (sem Ecom, sem loja fechada) — destino da
-    distribuição física.
+    """Lojas físicas Souq ativas — destino da distribuição física e base da
+    projeção (nº de lojas do parque).
 
-    `perfis` (Perfil Econômico) e `climas` (Temperatura) restringem o parque-alvo;
-    None/vazio = todas.
+    Ativa = sem `dt_fechamento` na base E não desligada na aba Configurações
+    (`lojas_inativas`). `perfis` (Perfil Econômico) e `climas` (Temperatura)
+    restringem o parque-alvo; None/vazio = todas. `cfg` injeta a config (testes).
     """
     lj = lojas_souq(caminho, incluir_ecom=False)
     lj = lj[lj["dt_fechamento"].isna()]
+    inativas = lojas_inativas_config(cfg)
+    if inativas:
+        lj = lj[~lj["sk_localidade"].astype(float).astype(str).isin(inativas)]
     if perfis:
         lj = lj[lj["Perfil"].isin(list(perfis))]
     if climas:
@@ -299,33 +318,53 @@ def opcoes_perfil_clima(caminho: Optional[str] = None) -> dict:
     }
 
 
-def espelhos_loja_nova(caminho: Optional[str] = None) -> dict:
-    """De-para de loja nova -> loja espelho, de `config/lojas_espelho.yaml`.
+def espelhos_loja_nova(caminho: Optional[str] = None, cfg: Optional[dict] = None) -> dict:
+    """De-para de loja nova -> loja espelho: `config/lojas_espelho.yaml` sobreposto
+    pelo que a aba Configurações salvou (`lojas_espelho`, por sk).
 
     Retorna {sk_nova: (sk_espelho, fator, nome_nova, nome_espelho)} com as chaves
     no formato das participações ('484.0'). Regra do negócio: loja nova sem venda
     dos espelhos selecionados recebe fator × participação da loja espelho
     (ex.: Casa Jardins = 75% do Iguatemi SP). Nome que não bater com a base de
     lojas é ignorado em silêncio (o YAML é editável pelo negócio).
+
+    Sobreposição da config: {sk_nova: {"espelho": sk|None, "fator": 0.75}};
+    `espelho` None desliga a regra do YAML para aquela loja. `cfg` injeta a
+    config (testes); None = `load_config()`.
     """
     import yaml
 
-    arq = PROJ_ROOT / "config" / "lojas_espelho.yaml"
-    if not arq.exists():
-        return {}
-    with arq.open("r", encoding="utf-8") as fh:
-        cfg = yaml.safe_load(fh) or {}
+    from core.config_utils import load_config
 
     lj = lojas_souq(caminho, incluir_ecom=False)
     por_nome = {str(r["desc_nome"]).strip().casefold(): (str(float(r["sk_localidade"])), str(r["desc_nome"]))
                 for _, r in lj.iterrows()}
+    por_sk = {str(float(r["sk_localidade"])): str(r["desc_nome"]) for _, r in lj.iterrows()}
 
     saida = {}
-    for nome_nova, regra in cfg.items():
-        nova = por_nome.get(str(nome_nova).strip().casefold())
-        esp = por_nome.get(str(regra.get("espelho", "")).strip().casefold())
-        if nova and esp:
-            saida[nova[0]] = (esp[0], float(regra.get("fator", 1.0)), nova[1], esp[1])
+    arq = PROJ_ROOT / "config" / "lojas_espelho.yaml"
+    if arq.exists():
+        with arq.open("r", encoding="utf-8") as fh:
+            base = yaml.safe_load(fh) or {}
+        for nome_nova, regra in base.items():
+            nova = por_nome.get(str(nome_nova).strip().casefold())
+            esp = por_nome.get(str((regra or {}).get("espelho", "")).strip().casefold())
+            if nova and esp:
+                saida[nova[0]] = (esp[0], float((regra or {}).get("fator", 1.0)), nova[1], esp[1])
+
+    cfg = load_config() if cfg is None else cfg
+    for sk_nova, regra in (cfg.get("lojas_espelho") or {}).items():
+        try:
+            sk_nova = str(float(sk_nova))
+        except (TypeError, ValueError):
+            continue
+        esp = (regra or {}).get("espelho")
+        if not esp:
+            saida.pop(sk_nova, None)                 # regra desligada na config
+            continue
+        esp = str(float(esp))
+        if sk_nova in por_sk and esp in por_sk:
+            saida[sk_nova] = (esp, float((regra or {}).get("fator") or 1.0), por_sk[sk_nova], por_sk[esp])
     return saida
 
 
