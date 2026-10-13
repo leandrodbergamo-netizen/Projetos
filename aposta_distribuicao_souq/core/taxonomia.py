@@ -55,6 +55,22 @@ def _cfg_subgrupo() -> dict:
         return yaml.safe_load(fh) or {"sinonimos": {}}
 
 
+@lru_cache(maxsize=1)
+def material_por_sku() -> dict:
+    """De-para cod_sku_pai -> material (composição) de `config/material_por_sku.yaml`.
+
+    Complementa o cadastro: modelos SEM `desc_material` recebem a composição
+    coletada no site (coleta_tecido_site.py) ou escrita à mão, e só então passam
+    pela regra de tecido. Arquivo ausente = {}. Mudou o YAML → reiniciar o app.
+    """
+    caminho = CONFIG_DIR / "material_por_sku.yaml"
+    if not caminho.exists():
+        return {}
+    with caminho.open("r", encoding="utf-8") as fh:
+        cfg = yaml.safe_load(fh) or {}
+    return {str(k).strip(): str(v).strip() for k, v in cfg.items() if v}
+
+
 def _primeira_ocorrencia(texto: str, mapa: dict) -> Optional[str]:
     """Retorna o bucket da 1a chave (por posição) encontrada em `texto`."""
     achou, pos_min = None, None

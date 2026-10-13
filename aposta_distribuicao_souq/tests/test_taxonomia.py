@@ -170,3 +170,49 @@ class TestFaixasDoSubgrupo:
     def test_subgrupo_inexistente_retorna_vazio(self, pasta_faixas):
         from core.taxonomia import faixas_do_subgrupo
         assert faixas_do_subgrupo("VESTIDO", caminho=pasta_faixas).empty
+
+
+# --------------------------------------------------------------------------- #
+# De-para de material por SKU (cadastro sem desc_material)
+# --------------------------------------------------------------------------- #
+def test_preparar_produtos_completa_material_pelo_depara(monkeypatch):
+    import pandas as pd
+    from core import espelho, taxonomia
+
+    monkeypatch.setattr(espelho, "material_por_sku",
+                        lambda: {"04.26.02.777.054": "100% VISCOSE"})
+    monkeypatch.setattr(taxonomia, "material_por_sku",
+                        lambda: {"04.26.02.777.054": "100% VISCOSE"})
+    prod = pd.DataFrame({
+        "sk_produto": [1, 2, 3],
+        "cod_sku_pai": ["04.26.02.777.054", "04.26.02.777.054", "04.26.02.999.001"],
+        "desc_item": ["BLUSA DEVA", "BLUSA DEVA", "BLUSA X"],
+        "desc_linha": ["ROUPA"] * 3,
+        "desc_sub_grupo_wbg": ["BLUSA"] * 3,
+        "desc_grupo_wgb": ["TECIDO PLANO"] * 3,
+        "desc_material": [None, "LINHO PURO", None],   # 2ª linha: cadastro prevalece
+        "desc_cor": ["PRETO"] * 3,
+        "desc_tamanho": ["P", "M", "P"],
+        "desc_colecao": ["INVERNO 2026"] * 3,
+        "dt_envio": [pd.NaT] * 3,
+        "preco_tabela": [100.0] * 3,
+        "desc_status_produto": ["ATIVO"] * 3,
+    })
+    out = espelho.preparar_produtos(prod)
+    por_sk = out.set_index("sk_produto")
+    assert por_sk.loc[1, "grupo_material"] == "Viscose"     # veio do de-para
+    assert por_sk.loc[2, "grupo_material"] == "Linho"       # cadastro prevalece
+    assert por_sk.loc[3, "grupo_material"] == "Outros"      # sem de-para segue Outros
+
+
+def test_material_por_sku_sem_arquivo(monkeypatch, tmp_path):
+    from core import taxonomia
+
+    monkeypatch.setattr(taxonomia, "CONFIG_DIR", tmp_path)
+    taxonomia.material_por_sku.cache_clear()
+    assert taxonomia.material_por_sku() == {}
+    (tmp_path / "material_por_sku.yaml").write_text(
+        "04.26.02.777.054: 100% VISCOSE\n04.26.02.778.054:\n", encoding="utf-8")
+    taxonomia.material_por_sku.cache_clear()
+    assert taxonomia.material_por_sku() == {"04.26.02.777.054": "100% VISCOSE"}
+    taxonomia.material_por_sku.cache_clear()
