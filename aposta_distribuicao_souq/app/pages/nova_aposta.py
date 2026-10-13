@@ -12,11 +12,10 @@ import pandas as pd
 import streamlit as st
 
 from app import estilo
-from app.dados_app import (aceleracao_lojas, contexto_lojas, opcoes, opcoes_por_relevancia,
+from app.dados_app import (contexto_lojas, fatores_crescimento, opcoes, opcoes_por_relevancia,
                            produtos_prep, totais_por_sku, vendas_fp)
 from core.config_utils import load_config
-from core.regra_distribuicao import (fatores_aceleracao, lojas_com_aceleracao,
-                                     lojas_equivalentes)
+from core.regra_distribuicao import lojas_com_aceleracao, lojas_equivalentes
 from core.dados import (colecoes_projetaveis, fim_periodo_saudavel, lojas_alvo_souq,
                         opcoes_perfil_clima, participacao_lojas, semanas_ate)
 from core.espelho import (candidatos_espelho, curva_tamanhos_grade,
@@ -374,8 +373,8 @@ def _dimensionar(perfis=None, climas=None):
     form = st.session_state["formulario"]
     # crescimento por loja (Configurações): -100% tira a loja do parque;
     # 120% faz a loja valer 1,2 loja de histórico na venda física
-    fatores = fatores_aceleracao(aceleracao_lojas())
     lojas = [str(float(x)) for x in lojas_alvo_souq(perfis=perfis, climas=climas)["sk_localidade"]]
+    fatores = fatores_crescimento(lojas)
     lojas = lojas_com_aceleracao(lojas, fatores)
     n = len(lojas)
     if n == 0:

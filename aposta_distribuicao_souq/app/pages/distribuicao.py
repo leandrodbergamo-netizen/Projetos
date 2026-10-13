@@ -12,13 +12,13 @@ import pandas as pd
 import streamlit as st
 
 from app import estilo
-from app.dados_app import aceleracao_lojas
+from app.dados_app import fatores_crescimento
 from core.config_utils import load_config
 from core.dados import (cluster_por_loja, espelhos_loja_nova, lojas_alvo_souq,
                         lojas_souq)
 from core.regra_distribuicao import (CD_ROTULO, acelerar_participacao, cd_por_tamanho,
-                                     distribuir, fatores_aceleracao,
-                                     lojas_com_aceleracao, participacao_com_loja_nova)
+                                     distribuir, lojas_com_aceleracao,
+                                     participacao_com_loja_nova)
 
 
 def _cd_por_tamanho(aposta_final: float, lojas_matriz: pd.DataFrame, curva: dict) -> dict:
@@ -191,7 +191,7 @@ def secao(proj: dict, registro_id: str | None = None) -> None:
     nomes_lj = {str(float(r["sk_localidade"])): r["desc_nome"] for _, r in lojas_df.iterrows()}
     # crescimento por loja (Configurações): -100% tira a loja da matriz;
     # os demais fatores ponderam a participação antes do rateio
-    fatores = fatores_aceleracao(aceleracao_lojas())
+    fatores = fatores_crescimento(nomes_lj)
     lojas_alvo = lojas_com_aceleracao(list(nomes_lj), fatores)
     fora = [nomes_lj[l] for l in nomes_lj if l not in lojas_alvo]
     lojas_df = lojas_df[lojas_df["sk_localidade"].astype(float).astype(str).isin(lojas_alvo)]

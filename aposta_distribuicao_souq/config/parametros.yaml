@@ -25,6 +25,10 @@ dias_para_considerar_ativo: 60
 # pelos espelhos, para toda aposta (0 = repete o historico; 10 = +10%).
 elasticidade_pct: 0
 
+# Crescimento padrao por loja (aba Configuracoes): % para toda loja sem ajuste
+# proprio em aceleracao_lojas (5 = cada loja vende 5% acima do historico).
+crescimento_padrao_pct: 5
+
 # Parque de lojas (aba Configuracoes). lojas_inativas: sk desligadas no modelo
 # alem das fechadas na base; lojas_espelho: {sk_nova: {espelho: sk, fator: 0.75}}
 # sobrepoe config/lojas_espelho.yaml (espelho vazio = regra desligada).

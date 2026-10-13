@@ -109,8 +109,26 @@ def invalidar_lojas() -> None:
     contexto_lojas.clear()
 
 
-def salvar_aceleracao(valores: dict) -> dict:
-    gravado = aceleracao.salvar(valores)
+def crescimento_padrao_pct() -> int:
+    """Crescimento padrão (%) de loja sem ajuste próprio (Configurações); 0 = histórico."""
+    from core.config_utils import load_config
+
+    try:
+        return int(round(float(load_config().get("crescimento_padrao_pct") or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def fatores_crescimento(lojas) -> dict:
+    """Fator por loja (1.0 = histórico) para as lojas dadas: ajuste próprio ou o padrão."""
+    from core.regra_distribuicao import fatores_aceleracao
+
+    return fatores_aceleracao(aceleracao_lojas(), lojas=list(lojas),
+                              padrao_pct=100 + crescimento_padrao_pct())
+
+
+def salvar_aceleracao(valores: dict, padrao_pct: int | None = None) -> dict:
+    gravado = aceleracao.salvar(valores, padrao=padrao_pct)
     aceleracao_lojas.clear()
     return gravado
 

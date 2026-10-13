@@ -35,8 +35,9 @@ create table if not exists public."{TABELA}" (
 """
 
 
-def normalizar(aceleracao: Optional[dict]) -> Dict[str, int]:
-    """{sk: %} saneado: chave '484.0', % inteiro em [0, 300], sem os 100 (neutros).
+def normalizar(aceleracao: Optional[dict], padrao: Optional[int] = PCT_NEUTRO) -> Dict[str, int]:
+    """{sk: %} saneado: chave '484.0', % inteiro em [0, 300], sem os iguais ao
+    `padrao` (loja no padrão não precisa constar; None = não descarta nada).
     Valor inválido é ignorado."""
     saida: Dict[str, int] = {}
     for loja, pct in (aceleracao or {}).items():
@@ -48,7 +49,7 @@ def normalizar(aceleracao: Optional[dict]) -> Dict[str, int]:
         if v != v:                      # NaN
             continue
         p = int(round(min(max(v, PCT_MIN), PCT_MAX)))
-        if p != PCT_NEUTRO:
+        if padrao is None or p != padrao:
             saida[chave] = p
     return saida
 
@@ -67,7 +68,7 @@ def _carregar_db() -> Dict[str, int]:
                 text(f'select sk_localidade, pct from public."{TABELA}"')).fetchall()
     finally:
         eng.dispose()
-    return normalizar({sk: pct for sk, pct in linhas})
+    return normalizar({sk: pct for sk, pct in linhas}, padrao=None)
 
 
 def _salvar_db(aceleracao: Dict[str, int]) -> None:
@@ -93,7 +94,7 @@ def _salvar_db(aceleracao: Dict[str, int]) -> None:
 # Backend local (parametros.yaml)
 # --------------------------------------------------------------------------- #
 def _carregar_arq(caminho: Optional[Path]) -> Dict[str, int]:
-    return normalizar(load_config(caminho).get(CHAVE_LOCAL))
+    return normalizar(load_config(caminho).get(CHAVE_LOCAL), padrao=None)
 
 
 def _salvar_arq(aceleracao: Dict[str, int], caminho: Optional[Path]) -> None:
@@ -112,9 +113,11 @@ def carregar(caminho_local: Optional[Path] = None) -> Dict[str, int]:
     return _carregar_arq(caminho_local)
 
 
-def salvar(aceleracao: Optional[dict], caminho_local: Optional[Path] = None) -> Dict[str, int]:
-    """Substitui a configuração inteira pelo dict dado (saneado). Retorna o que gravou."""
-    limpo = normalizar(aceleracao)
+def salvar(aceleracao: Optional[dict], caminho_local: Optional[Path] = None,
+           padrao: Optional[int] = PCT_NEUTRO) -> Dict[str, int]:
+    """Substitui a configuração inteira pelo dict dado (saneado; lojas no `padrao`
+    não são gravadas). Retorna o que gravou."""
+    limpo = normalizar(aceleracao, padrao=padrao)
     if fonte.db_url():
         _salvar_db(limpo)
     else:

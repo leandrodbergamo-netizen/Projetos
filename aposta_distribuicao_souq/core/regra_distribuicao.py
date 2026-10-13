@@ -446,12 +446,17 @@ def participacao_com_loja_nova(
 # --------------------------------------------------------------------------- #
 # Aceleração de venda por loja (Configurações)
 # --------------------------------------------------------------------------- #
-def fatores_aceleracao(aceleracao_pct: Optional[Dict] = None) -> Dict[str, float]:
+def fatores_aceleracao(aceleracao_pct: Optional[Dict] = None,
+                       lojas: Optional[List[str]] = None,
+                       padrao_pct: float = 100.0) -> Dict[str, float]:
     """Converte a config `aceleracao_lojas` ({sk_localidade: %}) em fatores.
 
     100 = neutro (a loja vende o que o histórico diz); 0 = a loja não vai
     vender nada (sai do parque); 120 = cresce 20% em peças. Chave no formato
     das participações ('484.0'). Valor inválido é ignorado; negativo vira 0.
+    `lojas` + `padrao_pct`: toda loja da lista sem ajuste próprio recebe o
+    padrão (ex.: crescimento padrão de 5% => 105) — assim loja nova entra já
+    com o padrão, sem precisar constar na config.
     """
     saida: Dict[str, float] = {}
     for loja, pct in (aceleracao_pct or {}).items():
@@ -461,6 +466,8 @@ def fatores_aceleracao(aceleracao_pct: Optional[Dict] = None) -> Dict[str, float
         except (TypeError, ValueError):
             continue
         saida[chave] = max(fator, 0.0)
+    for loja in lojas or []:
+        saida.setdefault(str(loja), max(float(padrao_pct) / 100.0, 0.0))
     return saida
 
 

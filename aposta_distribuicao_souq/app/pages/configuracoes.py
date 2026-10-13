@@ -11,7 +11,8 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-from app.dados_app import aceleracao_lojas, invalidar_lojas, salvar_aceleracao
+from app.dados_app import (aceleracao_lojas, crescimento_padrao_pct, invalidar_lojas,
+                           salvar_aceleracao)
 from core import aceleracao as acel
 from core.config_utils import load_config, onde_grava, save_config
 from core.dados import espelhos_loja_nova, lojas_souq, rank_colecao
@@ -41,16 +42,17 @@ def _pct(valor, padrao: int) -> int:
 # --------------------------------------------------------------------------- #
 # Lojas ativas + lojas espelho
 # --------------------------------------------------------------------------- #
-def _card_lojas(cfg: dict) -> tuple[list[str], dict, dict]:
+def _card_lojas(cfg: dict, padrao_cresc: int) -> tuple[list[str], dict, dict]:
     """Editor do parque: quem está ativa hoje, qual loja espelho usa e o crescimento.
 
     Devolve (lojas_inativas, lojas_espelho, aceleracao) no formato gravado:
     - `lojas_inativas`: lista de sk ('122.0') desligadas aqui (além das fechadas na base);
     - `lojas_espelho`: {sk_nova: {"espelho": sk|None, "fator": 0.75}} só onde difere do
       `config/lojas_espelho.yaml` (None = regra do YAML desligada);
-    - `aceleracao`: {sk: %} com 100 = histórico (só lojas fora de 100), gravado por
-      `core/aceleracao` (tabela própria). Na tela aparece como crescimento: 0 = histórico,
-      +20 = vende 20% a mais, -100 = não vende (sai do parque e da matriz).
+    - `aceleracao`: {sk: %} com 100 = histórico, gravado por `core/aceleracao` (tabela
+      própria) só para lojas fora do padrão (`padrao_cresc`). Na tela aparece como
+      crescimento: 0 = histórico, +20 = vende 20% a mais, -100 = não vende (sai do
+      parque e da matriz); loja sem ajuste mostra o padrão.
     """
     lj = lojas_souq(incluir_ecom=False).copy()
     lj["sk"] = [str(float(x)) for x in lj["sk_localidade"]]
@@ -78,14 +80,16 @@ def _card_lojas(cfg: dict) -> tuple[list[str], dict, dict]:
     tab["% da loja espelho"] = [int(round(100 * regras[sk][1])) if sk in regras else 100
                                 for sk in tab["sk"]]
     acel_atual = aceleracao_lojas()
-    tab["Crescimento (%)"] = [_pct(acel_atual.get(sk, acel.PCT_NEUTRO), acel.PCT_NEUTRO) - acel.PCT_NEUTRO
+    pct_padrao = acel.PCT_NEUTRO + padrao_cresc
+    tab["Crescimento (%)"] = [_pct(acel_atual.get(sk, pct_padrao), pct_padrao) - acel.PCT_NEUTRO
                               for sk in tab["sk"]]
 
     n_ativas = int(tab["Ativa"].sum())
     n_esp = int((tab["Loja espelho"] != _SEM_ESPELHO).sum())
-    n_cresc = int((tab["Crescimento (%)"] != 0).sum())
+    n_cresc = int((tab["Crescimento (%)"] != padrao_cresc).sum())
     st.caption(f"**{n_ativas}** lojas ativas de {len(tab)} abertas na base · {n_esp} com loja "
-               f"espelho · {n_cresc} com crescimento ajustado. **Ativa** desmarcada tira a loja "
+               f"espelho · {n_cresc} fora do crescimento padrão ({padrao_cresc:+d}%). "
+               "**Ativa** desmarcada tira a loja "
                "do modelo. **Loja espelho**: enquanto a loja não tiver venda própria dos "
                "espelhos da aposta, recebe *% da loja espelho* × participação da loja indicada. "
                "**Crescimento**: % sobre a venda que a loja teria (própria ou via espelho); "
@@ -112,12 +116,20 @@ def _card_lojas(cfg: dict) -> tuple[list[str], dict, dict]:
                 help="Quanto da participação da loja espelho a loja nova recebe (75 = 75%)."),
             "Crescimento (%)": st.column_config.NumberColumn(
                 "Crescimento (%)", min_value=-100, max_value=200, step=5, format="%+d%%",
-                help="0 = histórico · +20 = vende 20% a mais · -100 = não vende (sai do parque)."),
+                help=f"Padrão {padrao_cresc:+d}% · 0 = histórico · +20 = vende 20% a mais · "
+                     "-100 = não vende (sai do parque)."),
         })
     if len(fechadas):
         st.caption("Fechadas na base (fora do modelo): " + " · ".join(
             f"{r['nome']} ({pd.Timestamp(r['dt_fechamento']):%m/%Y})" for _, r in fechadas.iterrows()) + ".")
 
+    # o que mudou nesta rodada (vai no toast, para edição acidental não passar despercebida)
+    mudancas = []
+    for col in ("Ativa", "Loja espelho", "% da loja espelho", "Crescimento (%)"):
+        for nome, antes, depois in zip(tab["Loja"], tab[col], editado[col]):
+            if str(antes) != str(depois):
+                mudancas.append(f"{nome}: {col} {antes} → {depois}")
+    st.session_state["_cfg_lojas_mudancas"] = mudancas
     inativas = sorted(sk for sk, ativa in zip(editado["sk"], editado["Ativa"]) if not bool(ativa))
     sobreposicao: dict = {}
     for sk, esp_nome, fator in zip(editado["sk"], editado["Loja espelho"], editado["% da loja espelho"]):
@@ -129,8 +141,9 @@ def _card_lojas(cfg: dict) -> tuple[list[str], dict, dict]:
         atual = (base[0], round(float(base[1]), 4)) if base else (None, None)
         if desejado != atual:
             sobreposicao[sk] = {"espelho": desejado[0], "fator": desejado[1] if desejado[0] else None}
-    aceleracao = acel.normalizar({sk: acel.PCT_NEUTRO + _pct(c, 0)
-                                  for sk, c in zip(editado["sk"], editado["Crescimento (%)"])})
+    aceleracao = acel.normalizar({sk: acel.PCT_NEUTRO + _pct(c, padrao_cresc)
+                                  for sk, c in zip(editado["sk"], editado["Crescimento (%)"])},
+                                 padrao=pct_padrao)
     return inativas, sobreposicao, aceleracao
 
 
@@ -188,11 +201,30 @@ def render() -> None:
     with st.container(border=True):
         st.markdown(_MARCA_CARD, unsafe_allow_html=True)
         st.subheader("Lojas ativas, lojas espelho e crescimento por loja")
-        lojas_inativas, lojas_espelho, aceleracao = _card_lojas(cfg)
-        if aceleracao != aceleracao_lojas():
+        a, _ = st.columns([1.4, 4])
+        padrao_cresc = int(a.number_input(
+            "Crescimento padrão (%)", -100, 200, crescimento_padrao_pct(), 5, format="%d",
+            help="Vale para toda loja sem ajuste próprio na coluna Crescimento, inclusive "
+                 "loja nova que entrar depois. 0 = repete o histórico."))
+        lojas_inativas, lojas_espelho, aceleracao = _card_lojas(cfg, padrao_cresc)
+        if padrao_cresc == crescimento_padrao_pct() and aceleracao != aceleracao_lojas():
             with st.spinner("Salvando…"):
-                salvar_aceleracao(aceleracao)
-            st.toast("Crescimento por loja salvo.", icon="✅")
+                salvar_aceleracao(aceleracao, padrao_pct=acel.PCT_NEUTRO + padrao_cresc)
+            st.toast("Salvo: " + " · ".join(st.session_state.get("_cfg_lojas_mudancas") or
+                                            ["crescimento por loja"]), icon="✅")
+            st.rerun()
+        b, _ = st.columns([1.8, 4])
+        if b.button("Restaurar padrão das lojas", key="cfg_lojas_reset",
+                    help="Todas ativas, lojas espelho do YAML e crescimento no padrão.",
+                    disabled=not (cfg.get("lojas_inativas") or cfg.get("lojas_espelho")
+                                  or aceleracao_lojas())):
+            cfg.update(lojas_inativas=[], lojas_espelho={})
+            with st.spinner("Restaurando…"):
+                save_config(cfg)
+                salvar_aceleracao({})
+            invalidar_lojas()
+            st.session_state.pop(_CHAVE_EDITOR_LOJAS, None)
+            st.toast("Lojas restauradas ao padrão.", icon="✅")
             st.rerun()
         st.caption("Regras de loja espelho de partida: `config/lojas_espelho.yaml`; o que "
                    "você mudar aqui prevalece sobre o arquivo.")
@@ -205,19 +237,23 @@ def render() -> None:
         "min_amostra_curva": int(min_amostra),
         "desde_colecao": desde_colecao,
         "elasticidade_pct": elasticidade_pct,
+        "crescimento_padrao_pct": padrao_cresc,
         "lojas_inativas": lojas_inativas,
         "lojas_espelho": lojas_espelho,
     }
     cfg.setdefault("elasticidade_pct", 0)
+    cfg.setdefault("crescimento_padrao_pct", 0)
     cfg.setdefault("lojas_inativas", [])
     cfg.setdefault("lojas_espelho", {})
     if any(cfg.get(k) != v for k, v in novo.items()):
         mudou_lojas = (cfg.get("lojas_inativas") != lojas_inativas
-                       or cfg.get("lojas_espelho") != lojas_espelho)
+                       or cfg.get("lojas_espelho") != lojas_espelho
+                       or cfg.get("crescimento_padrao_pct") != padrao_cresc)
         cfg.update(novo)
         with st.spinner("Salvando…"):
             save_config(cfg)
-        st.toast("Parâmetros salvos.", icon="✅")
+        detalhe = st.session_state.get("_cfg_lojas_mudancas") if mudou_lojas else None
+        st.toast("Salvo: " + " · ".join(detalhe) if detalhe else "Parâmetros salvos.", icon="✅")
         if mudou_lojas:
             invalidar_lojas()
             st.rerun()   # contadores e seleções refletem o salvo

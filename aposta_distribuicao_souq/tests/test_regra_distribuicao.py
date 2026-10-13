@@ -188,3 +188,12 @@ class TestAceleracaoLojas:
 
     def test_tudo_zero_devolve_vazio(self):
         assert acelerar_participacao({"1.0": 1.0}, {"1.0": 0.0}) == {}
+
+    def test_padrao_preenche_lojas_sem_ajuste(self):
+        f = fatores_aceleracao({"1.0": 120}, lojas=["1.0", "2.0", "3.0"], padrao_pct=105)
+        assert f == pytest.approx({"1.0": 1.2, "2.0": 1.05, "3.0": 1.05})
+        assert lojas_equivalentes(["1.0", "2.0", "3.0"], f) == pytest.approx(3.3)
+
+    def test_padrao_negativo_vira_zero(self):
+        f = fatores_aceleracao({}, lojas=["1.0"], padrao_pct=-10)
+        assert f == {"1.0": 0.0}

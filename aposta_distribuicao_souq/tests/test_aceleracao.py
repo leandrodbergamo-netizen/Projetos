@@ -51,3 +51,18 @@ class TestBackendLocal:
 
     def test_onde_grava_sem_banco(self):
         assert "parametros.yaml" in aceleracao.onde_grava()
+
+
+class TestPadrao:
+    def test_normalizar_descarta_so_o_padrao(self):
+        out = aceleracao.normalizar({"1": 105, "2": 100, "3": 120}, padrao=105)
+        assert out == {"2.0": 100, "3.0": 120}
+
+    def test_normalizar_sem_padrao_mantem_tudo(self):
+        out = aceleracao.normalizar({"1": 105, "2": 100}, padrao=None)
+        assert out == {"1.0": 105, "2.0": 100}
+
+    def test_carregar_mantem_loja_em_100_quando_padrao_e_outro(self, arq):
+        # com padrão 105, uma loja fixada em 100 (sem crescimento) precisa sobreviver
+        aceleracao.salvar({"1": 100, "2": 105}, caminho_local=arq, padrao=105)
+        assert aceleracao.carregar(caminho_local=arq) == {"1.0": 100}
