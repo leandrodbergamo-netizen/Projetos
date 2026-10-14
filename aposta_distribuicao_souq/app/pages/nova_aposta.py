@@ -62,8 +62,16 @@ def _contexto_form(form: dict) -> str:
     if not form:
         return ""
     ref = f"{form['sku_ref']} · " if form.get("sku_ref") else ""
-    return (f"{ref}{form['subgrupo']}/{form['tecido']} · "
+    return (f"{ref}{form['subgrupo']}/{_rotulo_segmento(form)} · "
             f"{_rotulo_faixas(form.get('faixas'))} · {form['colecao']}")
+
+
+def _rotulo_segmento(form: dict) -> str:
+    """Tecido, ou o grupo quando a aposta foi feita sem tecido (grupo no lugar)."""
+    tec, grp = form.get("tecido"), form.get("grupo")
+    if tec and grp:
+        return f"{tec} ({grp})"
+    return tec or grp or "—"
 
 
 # --------------------------------------------------------------------------- #
@@ -84,14 +92,19 @@ def _etapa_produto(cfg, pp) -> None:
         subgrupo = st.selectbox("Subgrupo", ops_sub,
                                 index=ops_sub.index(form["subgrupo"]) if form.get("subgrupo") in ops_sub else None,
                                 placeholder="Escolha o subgrupo…")
-        sku_ref = st.text_input("SKU pai / estilo (opcional)", value=form.get("sku_ref", ""),
-                                placeholder="04.26.__.___.___",
-                                help="Referência livre do produto novo — identifica o cenário no Histórico.").strip()
+        ops_grp = opcoes_por_relevancia("desc_grupo_wgb")
+        grupo = st.selectbox("Grupo / construção (opcional)", ops_grp,
+                             index=ops_grp.index(form["grupo"]) if form.get("grupo") in ops_grp else None,
+                             placeholder="Qualquer construção…",
+                             help="TECIDO PLANO, MALHA, TRICOT ou JEANS. Com o grupo escolhido, "
+                                  "o tecido passa a ser opcional (vazio = todos os tecidos "
+                                  "daquela construção).")
     with c2:
         ops_tec = opcoes_por_relevancia("grupo_material")
-        tecido = st.selectbox("Tecido (matéria-prima)", ops_tec,
-                              index=ops_tec.index(form["tecido"]) if form.get("tecido") in ops_tec else None,
-                              placeholder="Escolha o tecido…")
+        tecido = st.selectbox(
+            "Tecido (matéria-prima)" + (" — opcional" if grupo else ""), ops_tec,
+            index=ops_tec.index(form["tecido"]) if form.get("tecido") in ops_tec else None,
+            placeholder="Todos os tecidos do grupo…" if grupo else "Escolha o tecido…")
         cores = st.multiselect("Cor", opcoes_por_relevancia("cor_grupo"),
                                default=form.get("cores") or [],
                                help="Ordenadas por nº de modelos. Vazio = todas as cores; "
@@ -109,6 +122,16 @@ def _etapa_produto(cfg, pp) -> None:
         dt_padrao = pd.Timestamp(form["dt_entrada"]).date() if form.get("dt_entrada") else date.today()
         dt_entrada = st.date_input("Data de entrada em loja", value=dt_padrao, format="DD/MM/YYYY",
                                    help="Premissa dt_envio + 7 dias; posiciona a janela sazonal.")
+
+    t1, t2 = st.columns([1, 2])
+    sku_ref = t1.text_input("SKU pai / estilo (opcional)", value=form.get("sku_ref", ""),
+                            placeholder="04.26.__.___.___",
+                            help="Referência livre do produto novo — identifica o cenário no Histórico.").strip()
+    texto = t2.text_input(
+        "Buscar espelhos por nome / descrição (opcional)", value=form.get("texto", ""),
+        placeholder="ex.: FARAH · VESTIDO LONGO · 04.26.11.613",
+        help="Só entram como candidatos os produtos cujo nome, descrição ou código contenha "
+             "o texto (sem acento, sem caixa). Vários termos separados por ';' = qualquer um.").strip()
 
     if reguas is not None and len(reguas):
         linhas_regua = []
@@ -149,7 +172,7 @@ def _etapa_produto(cfg, pp) -> None:
              "distribuição e a curva de tamanhos (36≡XPP … 46≡GG). Tamanhos que "
              "os espelhos não venderam são projetados pelo segmento.")
 
-    pronto = subgrupo is not None and tecido is not None and bool(faixas_sel)
+    pronto = subgrupo is not None and (tecido is not None or grupo is not None) and bool(faixas_sel)
     fim = fim_periodo_saudavel(colecao, cfg.get("fim_periodo_verao", "02/01"),
                                cfg.get("fim_periodo_inverno", "14/06"))
     if pd.Timestamp(dt_entrada) > pd.Timestamp(fim):
@@ -158,8 +181,8 @@ def _etapa_produto(cfg, pp) -> None:
     b, resto = st.columns([1.6, 4])
     if b.button("Buscar espelhos →", type="primary", width="stretch", disabled=not pronto):
         st.session_state["formulario"] = {
-            "subgrupo": subgrupo, "tecido": tecido, "cores": cores,
-            "faixas": list(faixas_sel),
+            "subgrupo": subgrupo, "tecido": tecido, "grupo": grupo, "texto": texto or None,
+            "cores": cores, "faixas": list(faixas_sel),
             "sku_ref": sku_ref, "colecao": colecao, "dt_entrada": str(dt_entrada),
             "aproveitamento_pct": int(aproveitamento), "reserva_pct": int(reserva),
             "grade": grade_sel,
@@ -167,11 +190,12 @@ def _etapa_produto(cfg, pp) -> None:
         st.session_state["etapa"] = 2
         st.rerun()
     if pronto:
-        resto.caption(f"{subgrupo} · {tecido} · {_rotulo_faixas(faixas_sel)} · "
+        resto.caption(f"{subgrupo} · {_rotulo_segmento({'tecido': tecido, 'grupo': grupo})} · "
+                      f"{_rotulo_faixas(faixas_sel)} · "
                       f"grade {rotulo_grade(set(grade_sel)) if grade_sel else '—'} · "
-                      f"fim saudável {fim:%d/%m/%Y}")
+                      f"fim saudável {fim:%d/%m/%Y}" + (f" · busca “{texto}”" if texto else ""))
     else:
-        resto.caption("Preencha **subgrupo, tecido e faixas de preço** para buscar os espelhos.")
+        resto.caption("Preencha **subgrupo, tecido (ou grupo) e faixas de preço** para buscar os espelhos.")
 
 
 # --------------------------------------------------------------------------- #
@@ -234,9 +258,10 @@ def _etapa_espelhos(cfg, pp, fp) -> None:
         with st.spinner("Buscando espelhos e calculando velocidades…"):
             cand, soft = candidatos_espelho(
                 pp, subgrupo=form["subgrupo"], faixas=form.get("faixas"),
-                tecido=form["tecido"], cor_grupo=form.get("cores") or None,
-                desde_colecao=desde)
-            curva, nivel = curva_por(fp, subgrupo=form["subgrupo"], material=form["tecido"],
+                tecido=form.get("tecido"), grupo=form.get("grupo"),
+                cor_grupo=form.get("cores") or None, desde_colecao=desde,
+                texto=form.get("texto"))
+            curva, nivel = curva_por(fp, subgrupo=form["subgrupo"], material=form.get("tecido"),
                                      min_amostra=int(cfg.get("min_amostra_curva", 800)))
             total_bruto = len(cand)
             janelas = janelas_full_price(pp)
@@ -252,7 +277,8 @@ def _etapa_espelhos(cfg, pp, fp) -> None:
 
     if total_bruto == 0:
         st.warning("Nenhum candidato a espelho com esses filtros. Volte e adicione "
-                   "faixas de preço ou afrouxe a cor.")
+                   "faixas de preço, afrouxe a cor"
+                   + (" ou revise o texto de busca" if form.get("texto") else "") + ".")
         if st.button("← Produto"):
             st.session_state["etapa"] = 1
             st.rerun()
@@ -332,7 +358,8 @@ def _calcular_base(cfg, pp, fp, cand, curva, ctx, escolhidos, horizonte, janelas
     # participação por loja suavizada com o segmento subgrupo+tecido+fit
     fits = sorted(set(cand.loc[cand["cod_sku_pai"].isin(skus), "desc_fit"].dropna())
                   if "desc_fit" in cand.columns else set())
-    pool = pool_suavizacao(pp, subgrupo=form["subgrupo"], tecido=form["tecido"],
+    pool = pool_suavizacao(pp, subgrupo=form["subgrupo"], tecido=form.get("tecido"),
+                           grupo=form.get("grupo"),
                            fits=fits or None, desde_colecao=desde)
     fp_pool_fisico = fp[fp["cod_sku_pai"].isin(pool) & fisico]
     part_espelhos = participacao_lojas(fp_esp_fisico)
@@ -341,7 +368,8 @@ def _calcular_base(cfg, pp, fp, cand, curva, ctx, escolhidos, horizonte, janelas
 
     grade_sel = form.get("grade") or []
     curva_tam, curva_origem, avisos_curva = curva_tamanhos_grade(
-        fp, pp, skus, grade_sel, subgrupo=form["subgrupo"], tecido=form["tecido"],
+        fp, pp, skus, grade_sel, subgrupo=form["subgrupo"], tecido=form.get("tecido"),
+        grupo=form.get("grupo"),
         fits=fits or None, desde_colecao=desde)
 
     nomes = cand.drop_duplicates("cod_sku_pai").set_index("cod_sku_pai")["desc_item"].to_dict()
@@ -391,7 +419,7 @@ def _dimensionar(perfis=None, climas=None):
     ref = f"{form['sku_ref']} · " if form.get("sku_ref") else ""
     projecao = {
         "versao": 2,
-        "resumo": (f"{ref}{form['subgrupo']}/{form['tecido']} · "
+        "resumo": (f"{ref}{form['subgrupo']}/{_rotulo_segmento(form)} · "
                    f"{_rotulo_faixas(form.get('faixas'))} · {form['colecao']}"),
         "aposta_total": ap.aposta_sugerida,
         "aposta_final": ap.aposta_sugerida,
@@ -412,7 +440,8 @@ def _dimensionar(perfis=None, climas=None):
         "contribuicoes": base["contribuicoes"],
         "inputs": {
             "sku_ref": form.get("sku_ref"), "subgrupo": form["subgrupo"],
-            "tecido": form["tecido"], "cores": form.get("cores"),
+            "tecido": form.get("tecido"), "grupo": form.get("grupo"),
+            "texto": form.get("texto"), "cores": form.get("cores"),
             "grade": form.get("grade") or [],
             "faixas": form.get("faixas"), "dt_entrada": form["dt_entrada"],
             "colecao": form["colecao"], "aproveitamento": form["aproveitamento_pct"] / 100.0,

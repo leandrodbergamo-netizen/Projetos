@@ -598,3 +598,46 @@ class TestColecaoEHorizonte:
     def test_colecoes_projetaveis_em_ordem_cronologica(self):
         from core.dados import colecoes_projetaveis
         assert colecoes_projetaveis(2026)[:3] == ["INVERNO 2026", "VERÃO 2026-2027", "INVERNO 2027"]
+
+
+class TestCandidatosGrupoETexto:
+    def _pp(self):
+        return pd.DataFrame({
+            "cod_sku_pai": ["A.1", "A.2", "A.3", "A.4"],
+            "desc_item": ["VESTIDO FARAH", "VESTIDO LONGO BEL", "VESTIDO ÁGATA", "VESTIDO FARAH II"],
+            "nome_item": ["Farah", "Bel", "Agata", "Farah II"],
+            "desc_sub_grupo_wbg": ["VESTIDO"] * 4,
+            "desc_grupo_wgb": ["TECIDO PLANO", "MALHA", "TECIDO PLANO", "MALHA"],
+            "grupo_material": ["Linho", "Viscose", "Viscose", "Linho"],
+            "cor_grupo": ["Preto"] * 4,
+            "faixa": ["P2"] * 4,
+            "rank_colecao": [2025.0] * 4,
+            "desc_colecao": ["INVERNO 2025"] * 4,
+            "preco": [100.0] * 4, "url": [None] * 4, "dt_envio": [pd.NaT] * 4,
+        })
+
+    def test_grupo_substitui_o_tecido(self):
+        cand, _ = candidatos_espelho(self._pp(), subgrupo="VESTIDO", grupo="MALHA", relaxar=False)
+        assert set(cand["cod_sku_pai"]) == {"A.2", "A.4"}
+
+    def test_grupo_e_tecido_combinam(self):
+        cand, _ = candidatos_espelho(self._pp(), subgrupo="VESTIDO", grupo="MALHA",
+                                     tecido="Linho", relaxar=False)
+        assert set(cand["cod_sku_pai"]) == {"A.4"}
+
+    def test_texto_sem_acento_e_sem_caixa(self):
+        cand, _ = candidatos_espelho(self._pp(), subgrupo="VESTIDO", texto="agata", relaxar=False)
+        assert set(cand["cod_sku_pai"]) == {"A.3"}
+
+    def test_texto_varios_termos_qualquer_um(self):
+        cand, _ = candidatos_espelho(self._pp(), subgrupo="VESTIDO", texto="farah; bel",
+                                     relaxar=False)
+        assert set(cand["cod_sku_pai"]) == {"A.1", "A.2", "A.4"}
+
+    def test_texto_por_codigo(self):
+        cand, _ = candidatos_espelho(self._pp(), subgrupo="VESTIDO", texto="A.3", relaxar=False)
+        assert set(cand["cod_sku_pai"]) == {"A.3"}
+
+    def test_pool_suavizacao_respeita_grupo(self):
+        pool = pool_suavizacao(self._pp(), subgrupo="VESTIDO", grupo="TECIDO PLANO")
+        assert pool == {"A.1", "A.3"}

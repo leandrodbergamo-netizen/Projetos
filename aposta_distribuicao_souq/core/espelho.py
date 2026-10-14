@@ -20,7 +20,8 @@ from core.dados import datas_liquidacao, rank_colecao
 from core.regra_distribuicao import reservar_cd
 from core.sazonalidade import fator_janela, semanas_equivalentes
 from core.taxonomia import (agrupar_cor, agrupar_material, agrupar_tamanho,
-                            faixa_preco_series, material_por_sku, normalizar_subgrupo)
+                            faixa_preco_series, material_por_sku, norm,
+                            normalizar_subgrupo)
 
 # Colunas exibidas na tabela de candidatos. Manga/comprimento/fit entram como
 # informação de CONSULTA (ajudam o comprador a escolher), não como filtro: o eta²
@@ -109,13 +110,17 @@ def candidatos_espelho(
     desde_colecao: float = 2022.0,
     relaxar: bool = True,
     min_candidatos: int = 5,
+    texto: Optional[str] = None,
 ) -> tuple[pd.DataFrame, list[str]]:
     """Retorna (candidatos, filtros_soft_aplicados).
 
-    Hard: subgrupo + faixas + tecido + coleção >= desde. Coleção fora do
-    escopo (PERENE/ALTO VERÃO/CANCELADO) tem rank NaN e cai fora sozinha.
-    - `grupo` (construção) é opcional: o tecido já separa Tricot/Jeans/planos,
-      então a aba de aposta não pergunta mais a construção ao usuário.
+    Hard: subgrupo + faixas + (tecido e/ou grupo) + coleção >= desde + texto.
+    Coleção fora do escopo (PERENE/ALTO VERÃO/CANCELADO) tem rank NaN e cai
+    fora sozinha.
+    - `grupo` (construção: TECIDO PLANO, MALHA, TRICOT, JEANS) é opcional e
+      pode substituir o tecido: com grupo informado, `tecido` None = todos.
+    - `texto`: busca livre no nome/descrição/código (sem acento, sem caixa);
+      vários termos separados por ";" = qualquer um deles. Vazio = sem filtro.
     - `faixas`: uma faixa ("P1") ou várias (["P1","P4"]); vazio/None = todas.
       Cada produto carrega `faixa` calculada na régua da PRÓPRIA construção
       (P4 de malha ≠ P4 de tecido plano em R$) — o rótulo é o posicionamento.
@@ -136,6 +141,16 @@ def candidatos_espelho(
         hard &= df["faixa"].isin(alvo_faixas)
     if tecido is not None:
         hard &= df["grupo_material"] == tecido
+    termos = [norm(t) for t in str(texto or "").split(";") if norm(t)]
+    if termos:
+        alvo = pd.Series("", index=df.index)
+        for col in ("desc_item", "nome_item", "cod_sku_pai"):
+            if col in df.columns:
+                alvo = alvo + " " + df[col].map(norm)
+        m_txt = pd.Series(False, index=df.index)
+        for t in termos:
+            m_txt |= alvo.str.contains(t, regex=False)
+        hard &= m_txt
     base = df[hard]
 
     if isinstance(cor_grupo, str):
@@ -180,6 +195,7 @@ def pool_suavizacao(
     tecido: Optional[str] = None,
     fits=None,
     desde_colecao: float = 2022.0,
+    grupo: Optional[str] = None,
 ) -> set:
     """Modelos do mesmo subgrupo (+ tecido, + fit) para suavizar curvas.
 
@@ -192,6 +208,8 @@ def pool_suavizacao(
     m = df["desc_sub_grupo_wbg"] == subgrupo
     if tecido is not None:
         m &= df["grupo_material"] == tecido
+    if grupo is not None and "desc_grupo_wgb" in df.columns:
+        m &= df["desc_grupo_wgb"] == grupo
     m &= df["rank_colecao"] >= desde_colecao
     if fits and "desc_fit" in df.columns:
         m &= df["desc_fit"].isin(list(fits))
@@ -209,6 +227,7 @@ def curva_tamanhos_grade(
     fits=None,
     desde_colecao: float = 2022.0,
     col_tamanho: str = "tamanho_grupo",
+    grupo: Optional[str] = None,
 ) -> tuple[dict[str, float], dict[str, str], list[str]]:
     """Curva de tamanhos dos espelhos reconciliada com a grade da aposta.
 
@@ -240,9 +259,9 @@ def curva_tamanhos_grade(
 
     niveis = []
     if fits:
-        niveis.append(("pool_fit", {"tecido": tecido, "fits": fits}))
-    if tecido is not None:
-        niveis.append(("pool_tecido", {"tecido": tecido}))
+        niveis.append(("pool_fit", {"tecido": tecido, "fits": fits, "grupo": grupo}))
+    if tecido is not None or grupo is not None:
+        niveis.append(("pool_tecido", {"tecido": tecido, "grupo": grupo}))
     niveis.append(("pool_subgrupo", {}))
 
     for nome, kw in niveis:
